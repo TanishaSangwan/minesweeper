@@ -18,7 +18,7 @@ interface RoundDimensions {
 
 export default function Home() {
   const { address, isConnected } = useAccount();
-  const { connect, connectors } = useConnect();
+  const { connect, connectors, error: connectError } = useConnect();
   const { disconnect } = useDisconnect();
 
   const [roundIdInput, setRoundIdInput] = useState("0");
@@ -91,61 +91,93 @@ export default function Home() {
   const inProgress = state === RoundState.InProgress;
   const frozen = Boolean(freezeUntil && freezeUntil > Date.now());
 
+  const statusLine = connectError?.message ?? (finished ? "Board cleared — round finished." : null);
+
   return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
+    <main className="flex min-h-screen items-start justify-center p-6 sm:p-10">
       <FreezeOverlay freezeUntil={freezeUntil} />
 
-      <header className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Minesweeper Tournament</h1>
-        {isConnected ? (
-          <button onClick={() => disconnect()} className="rounded-md border border-slate-700 px-3 py-1.5 text-sm">
-            {address?.slice(0, 6)}…{address?.slice(-4)} · disconnect
-          </button>
-        ) : (
-          <button
-            onClick={() => connect({ connector: connectors[0] })}
-            className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-semibold"
-          >
-            Connect wallet
-          </button>
-        )}
-      </header>
+      <div className="win-window w-full max-w-2xl">
+        {/* Title bar */}
+        <div className="win-titlebar flex items-center justify-between px-2 py-1">
+          <span className="flex items-center gap-2 text-sm">💣 Minesweeper Tournament</span>
+          <div className="flex gap-1">
+            <span className="win-raised flex h-4 w-4 items-center justify-center text-[10px] leading-none text-black">
+              _
+            </span>
+            <span className="win-raised flex h-4 w-4 items-center justify-center text-[10px] leading-none text-black">
+              ✕
+            </span>
+          </div>
+        </div>
 
-      <section className="flex items-center gap-3 text-sm">
-        <label>Round ID</label>
-        <input
-          value={roundIdInput}
-          onChange={(e) => setRoundIdInput(e.target.value)}
-          className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1"
-        />
-        {entryFee !== undefined && <span className="text-slate-400">entry: {formatEther(entryFee)} MON</span>}
-        {rewardPerTile !== undefined && <span className="text-slate-400">reward/tile: {formatEther(rewardPerTile)} MON</span>}
-      </section>
+        <div className="p-3">
+          {/* Toolbar: wallet + LED counters, echoing the classic mine-counter/timer row */}
+          <div className="win-sunken mb-3 flex flex-wrap items-center justify-between gap-3 p-2">
+            <div className="win-sunken led-display px-2 py-1 text-lg">
+              {entryFee !== undefined ? `FEE ${formatEther(entryFee)}` : "FEE ----"}
+            </div>
 
-      {roundId !== null && state === RoundState.Open && (
-        <button
-          disabled={!isConnected || entryFee === undefined}
-          onClick={() => writeEnter({ ...tournamentContract, functionName: "enter", args: [roundId], value: entryFee })}
-          className="w-fit rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
-        >
-          Enter round
-        </button>
-      )}
+            {isConnected ? (
+              <button onClick={() => disconnect()} className="win-btn px-3 py-1 text-xs">
+                {address?.slice(0, 6)}…{address?.slice(-4)} · disconnect
+              </button>
+            ) : connectors.length === 0 ? (
+              <span className="text-xs font-bold text-red-800">No wallet extension detected</span>
+            ) : (
+              <button onClick={() => connect({ connector: connectors[0] })} className="win-btn px-3 py-1 text-xs font-bold">
+                Connect Wallet
+              </button>
+            )}
 
-      {finished && <p className="text-emerald-400">Board cleared — round finished.</p>}
+            <div className="win-sunken led-display px-2 py-1 text-lg">
+              {rewardPerTile !== undefined ? `WIN ${formatEther(rewardPerTile)}` : "WIN ----"}
+            </div>
+          </div>
 
-      {dims && (
-        <Board
-          width={dims.width}
-          height={dims.height}
-          revealed={revealed}
-          flags={flags}
-          myAddress={address}
-          frozen={frozen || !inProgress}
-          onReveal={click}
-          onToggleFlag={(index) => sendFlag(index, !flags.has(index))}
-        />
-      )}
+          {/* Round controls */}
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+            <label className="font-bold">Round ID</label>
+            <input
+              value={roundIdInput}
+              onChange={(e) => setRoundIdInput(e.target.value)}
+              className="win-sunken w-16 bg-white px-2 py-1 text-black outline-none"
+            />
+            {roundId !== null && state === RoundState.Open && (
+              <button
+                disabled={!isConnected || entryFee === undefined}
+                onClick={() => writeEnter({ ...tournamentContract, functionName: "enter", args: [roundId], value: entryFee })}
+                className="win-btn px-3 py-1 font-bold disabled:opacity-60"
+              >
+                Enter Round
+              </button>
+            )}
+          </div>
+
+          {/* Board */}
+          <div className="flex justify-center">
+            {dims ? (
+              <Board
+                width={dims.width}
+                height={dims.height}
+                revealed={revealed}
+                flags={flags}
+                myAddress={address}
+                frozen={frozen || !inProgress}
+                onReveal={click}
+                onToggleFlag={(index) => sendFlag(index, !flags.has(index))}
+              />
+            ) : (
+              <div className="win-sunken px-4 py-6 text-xs text-neutral-600">Waiting for round…</div>
+            )}
+          </div>
+        </div>
+
+        {/* Status bar */}
+        <div className="win-sunken mx-3 mb-3 px-2 py-1 text-xs">
+          {statusLine ?? (frozen ? "Frozen — hold on…" : inProgress ? "Right-click a tile to flag it." : "Round not started yet.")}
+        </div>
+      </div>
     </main>
   );
 }

@@ -21,16 +21,16 @@ export function Tile({ index, revealed, revealedByMe, flaggedBy, disabled, onRev
         if (!revealed) onToggleFlag(index);
       }}
       className={[
-        "aspect-square w-full rounded-md border text-xs font-semibold transition-colors",
+        "win-tile flex aspect-square w-full items-center justify-center text-sm leading-none",
         revealed
           ? revealedByMe
-            ? "border-emerald-500 bg-emerald-500/20 text-emerald-300"
-            : "border-slate-600 bg-slate-800/60 text-slate-400"
-          : "border-slate-700 bg-slate-900 hover:bg-slate-800 disabled:opacity-50",
+            ? "win-tile-sunken win-tile-sunken-mine text-emerald-700"
+            : "win-tile-sunken text-neutral-500"
+          : "win-tile-raised cursor-pointer disabled:cursor-not-allowed",
       ].join(" ")}
       title={flaggedBy ? `Flagged by ${flaggedBy}` : undefined}
     >
-      {flaggedBy && !revealed ? "🚩" : revealed ? "" : ""}
+      {flaggedBy && !revealed ? "🚩" : ""}
     </button>
   );
 }

@@ -3,10 +3,136 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+  --win-face: #c0c0c0;
+  --win-face-light: #d4d4d4;
+  --win-highlight: #ffffff;
+  --win-highlight-soft: #dfdfdf;
+  --win-shadow: #808080;
+  --win-shadow-dark: #000000;
+  --win-desktop: #008080;
+  --win-titlebar-from: #000080;
+  --win-titlebar-to: #1084d0;
+  --win-text: #000000;
+  --led-bg: #000000;
+  --led-fg: #ff2222;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: #0b0d12;
-  color: #e6e9ef;
+  background: var(--win-desktop);
+  color: var(--win-text);
+  font-family: Tahoma, "MS Sans Serif", Geneva, Verdana, sans-serif;
+  font-size: 13px;
+}
+
+/* --- Classic two-tone chiseled bevels, no extra markup needed --- */
+.win-raised {
+  background: var(--win-face);
+  box-shadow:
+    inset 1px 1px 0 var(--win-highlight),
+    inset -1px -1px 0 var(--win-shadow-dark),
+    inset 2px 2px 0 var(--win-highlight-soft),
+    inset -2px -2px 0 var(--win-shadow);
+}
+
+.win-sunken {
+  background: var(--win-face);
+  box-shadow:
+    inset 1px 1px 0 var(--win-shadow-dark),
+    inset -1px -1px 0 var(--win-highlight),
+    inset 2px 2px 0 var(--win-shadow),
+    inset -2px -2px 0 var(--win-highlight-soft);
+}
+
+/* --- Window chrome --- */
+.win-window {
+  background: var(--win-face);
+  box-shadow:
+    inset 1px 1px 0 var(--win-highlight),
+    inset -1px -1px 0 var(--win-shadow-dark);
+}
+
+.win-titlebar {
+  background: linear-gradient(90deg, var(--win-titlebar-from), var(--win-titlebar-to));
+  color: #ffffff;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* --- Buttons --- */
+.win-btn {
+  background: var(--win-face);
+  color: var(--win-text);
+  box-shadow:
+    inset 1px 1px 0 var(--win-highlight),
+    inset -1px -1px 0 var(--win-shadow-dark),
+    inset 2px 2px 0 var(--win-highlight-soft),
+    inset -2px -2px 0 var(--win-shadow);
+}
+
+.win-btn:active:not(:disabled) {
+  box-shadow:
+    inset 1px 1px 0 var(--win-shadow-dark),
+    inset -1px -1px 0 var(--win-highlight),
+    inset 2px 2px 0 var(--win-shadow),
+    inset -2px -2px 0 var(--win-highlight-soft);
+  padding-top: 1px;
+  padding-left: 1px;
+}
+
+.win-btn:disabled {
+  color: var(--win-shadow);
+}
+
+/* --- Tiles --- */
+.win-tile {
+  font-family: Tahoma, sans-serif;
+  font-weight: 700;
+}
+
+.win-tile-raised {
+  background: var(--win-face);
+  box-shadow:
+    inset 1px 1px 0 var(--win-highlight),
+    inset -1px -1px 0 var(--win-shadow-dark),
+    inset 2px 2px 0 var(--win-highlight-soft),
+    inset -2px -2px 0 var(--win-shadow);
+}
+
+.win-tile-raised:active:not(:disabled) {
+  box-shadow:
+    inset 1px 1px 0 var(--win-shadow-dark),
+    inset -1px -1px 0 var(--win-highlight),
+    inset 2px 2px 0 var(--win-shadow),
+    inset -2px -2px 0 var(--win-highlight-soft);
+}
+
+.win-tile-sunken {
+  background: var(--win-face-light);
+  box-shadow:
+    inset 1px 1px 0 var(--win-shadow),
+    inset -1px 0 0 var(--win-shadow);
+}
+
+.win-tile-sunken-mine {
+  background: #d0f0d0;
+}
+
+/* --- LED digital readout (mine counter / timer style) --- */
+.led-display {
+  background: var(--led-bg);
+  color: var(--led-fg);
+  font-family: var(--font-led), monospace;
+  letter-spacing: 1px;
+  line-height: 1;
+  text-shadow: 0 0 4px rgba(255, 34, 34, 0.6);
+}
+
+::selection {
+  background: var(--win-titlebar-from);
+  color: #fff;
 }
