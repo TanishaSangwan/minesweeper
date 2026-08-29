@@ -103,8 +103,9 @@ Left as follow-ups (called out in-code where relevant, not silently skipped):
   `revealSafeTile` currently goes through standard `useWriteContract` +
   `useWaitForTransactionReceipt` instead of guessing an import that might not exist. Swap in
   once that hook's source is confirmed.
-- **WS auth**: the broker's `/ws?...&player=0x..` trusts the client-supplied address — needs a
-  signed-message check before this is anything but a demo (see `server/README.md`).
+- ~~**WS auth**~~: done — the broker now requires a signature over a short-lived message
+  proving control of the claimed address, and the admin routes require a bearer token. See
+  `server/README.md`.
 - ~~**Deploy + verify**~~: done — current address carries the adjacent-mine hint and is
   verified on both explorers. See "Deployed" above.
 - **shadcn**: skipped in favor of plain Tailwind, to avoid depending on `npx shadcn init`

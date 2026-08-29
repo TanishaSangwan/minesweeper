@@ -12,6 +12,9 @@ export const env = {
   chainId: Number(process.env.CHAIN_ID ?? "10143"),
   contractAddress: required("CONTRACT_ADDRESS") as `0x${string}`,
   operatorPrivateKey: required("OPERATOR_PRIVATE_KEY") as `0x${string}`,
+  // Gates the operator-only round-lifecycle routes. Required, not optional: an unset token
+  // would otherwise silently mean "no auth" on a publicly reachable broker.
+  adminToken: required("ADMIN_TOKEN"),
   port: Number(process.env.PORT ?? "8787"),
   freezeMs: Number(process.env.FREEZE_MS ?? "5000"),
 };

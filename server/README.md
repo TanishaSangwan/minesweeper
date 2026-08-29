@@ -47,6 +47,29 @@ Server → client (see `ServerMessage` in `roundManager.ts` for the full union):
 - `"flag"` (broadcast) — flags are visible to everyone.
 - `"round-finished"` (broadcast) — board is fully cleared; `revealBoard` fires automatically.
 
-**Not yet done:** the `player` on the WS connection is just a query param — add real auth
-(e.g. a signed message) before this leaves hackathon-land, since right now nothing stops a
-client from claiming someone else's address and reading their private channel.
+## Auth
+
+Both admin routes require `Authorization: Bearer $ADMIN_TOKEN`. They spend the operator
+wallet's gas on every call, so an unauthenticated broker can be drained in a loop. `ADMIN_TOKEN`
+is a required env var — there is deliberately no "unset means open" mode.
+
+The WS connection is authenticated by signature. Alongside `roundId` and `player`, the client
+sends `issuedAt` (epoch ms) and `signature` over:
+
+```
+Minesweeper Tournament
+round: <roundId>
+player: <lowercased address>
+issued: <issuedAt>
+```
+
+The broker recovers the signer and rejects (close code 1008) anything that doesn't match the
+claimed address, or whose `issuedAt` is more than 5 minutes from now in either direction. The
+bound is two-sided on purpose: a future timestamp would otherwise mint a credential that never
+expires. `authMessage` in `src/auth.ts` and the copy in `web/hooks/useGameSocket.ts` must stay
+byte-identical.
+
+Without this, a player who legitimately entered could also connect *as another entrant* —
+probing tiles under that identity to dodge their own 5s freezes, learning which tiles are safe,
+and reading their private mine-hit channel. Signing costs no UX because the browser's session
+wallet signs locally, with no prompt.

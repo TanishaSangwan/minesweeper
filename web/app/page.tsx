@@ -139,7 +139,7 @@ export default function Home() {
 
   const { click, flag: sendFlag } = useGameSocket(
     roundId !== null ? roundId.toString() : null,
-    sessionAddress,
+    session,
     handleMessage,
   );
 

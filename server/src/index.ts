@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
+import { requireAdmin, verifyPlayerSignature } from "./auth.js";
 import { env } from "./env.js";
 import { RoundManager, type ServerMessage } from "./roundManager.js";
 
@@ -19,7 +20,7 @@ rounds.wireChainEvents();
 // Admin-only in a real deploy (put behind auth). Opens a round for entries and generates the
 // board (kept secret in memory) — does NOT commit the root onchain yet, so players still have
 // a window to call `enter` before the pool used for reward-per-tile math is locked in.
-app.post("/api/rounds", async (req, res) => {
+app.post("/api/rounds", requireAdmin, async (req, res) => {
   try {
     const { width, height, mineCount, entryFeeWei, minPlayers } = req.body as {
       width: number;
@@ -39,7 +40,7 @@ app.post("/api/rounds", async (req, res) => {
 // Admin-only. Call once enough players have entered — locks entries, commits the board's
 // Merkle root onchain, and opens play. Reverts (propagated as 400) if the contract's own
 // `minPlayers` threshold hasn't been met yet.
-app.post("/api/rounds/:id/start", async (req, res) => {
+app.post("/api/rounds/:id/start", requireAdmin, async (req, res) => {
   try {
     await rounds.startRound(BigInt(req.params.id));
     res.json({ started: true });
@@ -64,54 +65,65 @@ const server = app.listen(env.port, () => {
   console.log(`minesweeper broker listening on :${env.port}`);
 });
 
-// One socket per connected player; roundId + player address come in on the query string
-// (swap for a signed-message/session auth check before this leaves hackathon-land — as is,
-// nothing stops a client from claiming someone else's address here, which matters for the
-// private mine-hit channel).
+// One socket per connected player. The claimed address must be proved with a signature over
+// `authMessage(...)`; without that, anyone could connect as another entrant, probe tiles under
+// that identity to dodge their own freezes, and read their private mine-hit channel.
 const wss = new WebSocketServer({ server, path: "/ws" });
 
 wss.on("connection", (socket: WebSocket, req) => {
-  const url = new URL(req.url ?? "", "http://localhost");
-  const roundId = url.searchParams.get("roundId");
-  const player = url.searchParams.get("player") as Address | null;
-  if (!roundId || !player) {
-    socket.close(1008, "roundId and player query params are required");
-    return;
-  }
+  void (async () => {
+    const url = new URL(req.url ?? "", "http://localhost");
+    const roundId = url.searchParams.get("roundId");
+    const player = url.searchParams.get("player") as Address | null;
+    const signature = url.searchParams.get("signature");
+    const issuedAt = url.searchParams.get("issuedAt");
 
-  const roundIdBig = BigInt(roundId);
-  try {
-    rounds.registerSocket(roundIdBig, player, socket);
-  } catch (err) {
-    socket.close(1008, (err as Error).message);
-    return;
-  }
+    if (!roundId || !player || !signature || !issuedAt) {
+      socket.close(1008, "roundId, player, signature and issuedAt query params are required");
+      return;
+    }
 
-  socket.on("message", (raw) => {
-    let msg: { type: string; tileIndex?: number; flagged?: boolean };
+    const auth = await verifyPlayerSignature({ roundId, player, issuedAt, signature });
+    if (!auth.ok) {
+      console.warn(`ws: rejected ${player} on round ${roundId} — ${auth.reason}`);
+      socket.close(1008, auth.reason);
+      return;
+    }
+
+    const roundIdBig = BigInt(roundId);
     try {
-      msg = JSON.parse(raw.toString());
-    } catch {
-      const err: ServerMessage = { type: "error", message: "invalid JSON" };
-      socket.send(JSON.stringify(err));
+      rounds.registerSocket(roundIdBig, player, socket);
+    } catch (err) {
+      socket.close(1008, (err as Error).message);
       return;
     }
 
-    if (msg.type === "click" && typeof msg.tileIndex === "number") {
-      const response = rounds.handleClick(roundIdBig, player, msg.tileIndex);
-      socket.send(JSON.stringify(response));
-      return;
-    }
+    socket.on("message", (raw) => {
+      let msg: { type: string; tileIndex?: number; flagged?: boolean };
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        const err: ServerMessage = { type: "error", message: "invalid JSON" };
+        socket.send(JSON.stringify(err));
+        return;
+      }
 
-    if (msg.type === "flag" && typeof msg.tileIndex === "number") {
-      const flagged = Boolean(msg.flagged);
-      const response = rounds.handleFlag(roundIdBig, player, msg.tileIndex, flagged);
-      // Flags are visible to everyone, including the player who set them.
-      rounds.broadcast(roundIdBig, response);
-      return;
-    }
+      if (msg.type === "click" && typeof msg.tileIndex === "number") {
+        const response = rounds.handleClick(roundIdBig, player, msg.tileIndex);
+        socket.send(JSON.stringify(response));
+        return;
+      }
 
-    const err: ServerMessage = { type: "error", message: `unknown message type: ${msg.type}` };
-    socket.send(JSON.stringify(err));
-  });
+      if (msg.type === "flag" && typeof msg.tileIndex === "number") {
+        const flagged = Boolean(msg.flagged);
+        const response = rounds.handleFlag(roundIdBig, player, msg.tileIndex, flagged);
+        // Flags are visible to everyone, including the player who set them.
+        rounds.broadcast(roundIdBig, response);
+        return;
+      }
+
+        const err: ServerMessage = { type: "error", message: `unknown message type: ${msg.type}` };
+        socket.send(JSON.stringify(err));
+      });
+  })();
 });
