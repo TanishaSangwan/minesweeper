@@ -57,9 +57,37 @@ export function generateBoard({ width, height, mineCount }: BoardConfig): Genera
   if (mineCount <= 0 || mineCount >= totalTiles) {
     throw new Error(`mineCount must be between 1 and ${totalTiles - 1}`);
   }
-  const isMine = placeMines(totalTiles, mineCount);
+  return rebuildBoard({
+    width,
+    height,
+    isMine: placeMines(totalTiles, mineCount),
+    boardSeed: randomBoardSeed(),
+  });
+}
+
+/**
+ * Rebuilds a board from a layout + seed that were persisted earlier. Everything derived —
+ * adjacency, nonces, leaves, root — is recomputed rather than stored, so a restored round is
+ * byte-identical to the original and its root must still match what was committed onchain
+ * (`RoundManager.restore` asserts exactly that). Only the two irrecoverable inputs are kept
+ * on disk; see `store.ts` for why.
+ */
+export function rebuildBoard({
+  width,
+  height,
+  isMine,
+  boardSeed,
+}: {
+  width: number;
+  height: number;
+  isMine: boolean[];
+  boardSeed: bigint;
+}): GeneratedBoard {
+  const totalTiles = width * height;
+  if (isMine.length !== totalTiles) {
+    throw new Error(`layout has ${isMine.length} tiles, expected ${totalTiles} for ${width}x${height}`);
+  }
   const adjacentMines = computeAdjacentMines(isMine, width, height);
-  const boardSeed = randomBoardSeed();
   const commitment = commitBoard(isMine, adjacentMines, boardSeed);
 
   return {
@@ -67,6 +95,6 @@ export function generateBoard({ width, height, mineCount }: BoardConfig): Genera
     width,
     height,
     totalTiles,
-    totalSafeTiles: totalTiles - mineCount,
+    totalSafeTiles: isMine.reduce((n, mine) => (mine ? n : n + 1), 0),
   };
 }

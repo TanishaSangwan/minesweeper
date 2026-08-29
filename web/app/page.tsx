@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { formatEther } from "viem";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatEther, parseEther } from "viem";
 import {
   useAccount,
+  useBalance,
   useConnect,
   useDisconnect,
   useReadContract,
+  useSendTransaction,
   useSwitchChain,
   useWaitForTransactionReceipt,
   useWriteContract,
@@ -15,6 +17,7 @@ import { Board } from "@/components/Board";
 import { FreezeOverlay } from "@/components/FreezeOverlay";
 import { tournamentContract, brokerHttpUrl, RoundState } from "@/lib/contract";
 import { monadTestnet } from "@/lib/wagmi";
+import { createSessionWallet, loadOrCreateSessionKey, type SessionWallet } from "@/lib/session";
 import { useBoardSync } from "@/hooks/useBoardSync";
 import { useGameSocket, type ServerMessage } from "@/hooks/useGameSocket";
 
@@ -45,6 +48,21 @@ export default function Home() {
   // click is indistinguishable from a dead board.
   const [status, setStatus] = useState<string | null>(null);
 
+  // Session wallet: signs reveals with no prompt, so a round is actually playable. It is the
+  // entrant too, since revealSafeTile both authorises and pays msg.sender. See lib/session.ts.
+  const [sessionKey, setSessionKey] = useState<`0x${string}` | null>(null);
+  useEffect(() => setSessionKey(loadOrCreateSessionKey()), []);
+  const session: SessionWallet | null = useMemo(
+    () => (sessionKey ? createSessionWallet(sessionKey) : null),
+    [sessionKey],
+  );
+  const sessionAddress = session?.account.address ?? undefined;
+  const { data: sessionBalance } = useBalance({
+    address: sessionAddress,
+    query: { enabled: Boolean(sessionAddress), refetchInterval: 4000 },
+  });
+  const { sendTransaction: fundSession, isPending: isFunding } = useSendTransaction();
+
   const { data: roundInfo } = useReadContract({
     ...tournamentContract,
     functionName: "roundInfo",
@@ -74,15 +92,27 @@ export default function Home() {
       switch (msg.type) {
         case "safe":
           setStatus(null);
-          // The broker never submits this transaction itself — the player's own wallet does,
-          // and the payout lands directly in that wallet via the contract. `adjacentMines`
-          // is part of the committed leaf, so it has to travel with the proof; the contract
-          // then emits it publicly, which is how every other player learns the number.
-          writeReveal({
-            ...tournamentContract,
-            functionName: "revealSafeTile",
-            args: [roundId!, msg.tileIndex, msg.adjacentMines, BigInt(msg.nonce), msg.proof],
-          });
+          // Signed by the session wallet, so no confirmation dialog interrupts the race. The
+          // broker never submits this itself; the payout lands in whichever wallet sends it,
+          // which is why the session wallet is the entrant. `adjacentMines` is part of the
+          // committed leaf, so it travels with the proof; the contract then emits it
+          // publicly, which is how every other player learns the number.
+          if (!session) {
+            setStatus("session wallet not ready yet");
+            break;
+          }
+          session.client
+            .writeContract({
+              ...tournamentContract,
+              chain: monadTestnet,
+              account: session.account,
+              functionName: "revealSafeTile",
+              args: [roundId!, msg.tileIndex, msg.adjacentMines, BigInt(msg.nonce), msg.proof],
+            })
+            .catch((err: Error) => {
+              // A revert here is usually just losing the race for that tile.
+              setStatus(`tile ${msg.tileIndex}: ${err.message.split("\n")[0]}`);
+            });
           break;
         case "mine-hit":
           setStatus(null);
@@ -114,7 +144,11 @@ export default function Home() {
     [roundId, writeReveal],
   );
 
-  const { click, flag: sendFlag } = useGameSocket(roundId !== null ? roundId.toString() : null, address, handleMessage);
+  const { click, flag: sendFlag } = useGameSocket(
+    roundId !== null ? roundId.toString() : null,
+    sessionAddress,
+    handleMessage,
+  );
 
   const inProgress = state === RoundState.InProgress;
   // Derived from polled round state, not the RoundFinished event — see useBoardSync for why
@@ -187,6 +221,34 @@ export default function Home() {
         </div>
       )}
 
+      {session && (
+        <section className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-3 text-sm">
+          <p className="font-semibold">Session wallet — signs tile reveals with no popup</p>
+          <p className="mt-1 font-mono text-xs text-slate-400 break-all">{session.account.address}</p>
+          <p className="mt-1 text-slate-300">
+            balance: {sessionBalance ? formatEther(sessionBalance.value) : "…"} MON
+            {entryFee !== undefined && (sessionBalance?.value ?? 0n) < entryFee && (
+              <span className="ml-2 text-amber-400">— needs topping up to enter</span>
+            )}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              disabled={!isConnected || wrongNetwork || isFunding}
+              onClick={() =>
+                fundSession({ to: session.account.address, value: parseEther("1") })
+              }
+              className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+            >
+              {isFunding ? "Funding…" : "Fund 1 MON from your wallet"}
+            </button>
+            <span className="text-xs text-slate-500">
+              One confirmation, then the whole round is prompt-free. Rewards land here — send
+              them back to your main wallet when you&apos;re done.
+            </span>
+          </div>
+        </section>
+      )}
+
       <section className="flex items-center gap-3 text-sm">
         <label>Round ID</label>
         <input
@@ -200,11 +262,23 @@ export default function Home() {
 
       {roundId !== null && state === RoundState.Open && (
         <button
-          disabled={!isConnected || wrongNetwork || entryFee === undefined}
-          onClick={() => writeEnter({ ...tournamentContract, functionName: "enter", args: [roundId], value: entryFee })}
+          disabled={!session || entryFee === undefined || (sessionBalance?.value ?? 0n) < entryFee}
+          onClick={() =>
+            session
+              ?.client.writeContract({
+                ...tournamentContract,
+                chain: monadTestnet,
+                account: session.account,
+                functionName: "enter",
+                args: [roundId],
+                value: entryFee,
+              })
+              .then(() => setStatus("entered — waiting for the operator to start the round"))
+              .catch((err: Error) => setStatus(`enter failed: ${err.message.split("\n")[0]}`))
+          }
           className="w-fit rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
         >
-          Enter round
+          Enter round (session wallet, no popup)
         </button>
       )}
 
@@ -223,7 +297,7 @@ export default function Home() {
           revealed={revealed}
           flags={flags}
           myAddress={address}
-          frozen={frozen || !inProgress || wrongNetwork}
+          frozen={frozen || !inProgress}
           onReveal={click}
           onToggleFlag={(index) => sendFlag(index, !flags.has(index))}
         />

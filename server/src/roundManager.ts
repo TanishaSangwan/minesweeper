@@ -1,9 +1,10 @@
 import type { WebSocket } from "ws";
 import type { Hex } from "viem";
-import { generateBoard, type GeneratedBoard, type BoardConfig } from "./board.js";
+import { generateBoard, rebuildBoard, type GeneratedBoard, type BoardConfig } from "./board.js";
 import {
   createRoundOnChain,
   readEntrants,
+  readRoundInfo,
   revealBoardOnChain,
   startRoundOnChain,
   watchRoundFinished,
@@ -11,6 +12,7 @@ import {
 } from "./chain.js";
 import { env } from "./env.js";
 import { proofFor } from "./merkle.js";
+import { deleteRound, loadRounds, saveRound, storeDir } from "./store.js";
 
 type Address = `0x${string}`;
 
@@ -70,7 +72,7 @@ export class RoundManager {
     );
     console.log(`round ${roundId} created (createRound confirmed onchain)`);
 
-    this.rounds.set(roundId, {
+    const round: ActiveRound = {
       roundId,
       board,
       started: false,
@@ -80,7 +82,11 @@ export class RoundManager {
       frozenUntil: new Map(),
       flags: new Map(),
       sockets: new Map(),
-    });
+    };
+    this.rounds.set(roundId, round);
+    // Persist before returning: from here on the layout is the only thing that cannot be
+    // recovered from the chain, and losing it strands the pool permanently.
+    this.persist(round);
 
     return roundId;
   }
@@ -98,6 +104,7 @@ export class RoundManager {
     // this process believing otherwise — that state is unrecoverable, because re-calling
     // startRound reverts and `cancelRound` only works while a round is still Open.
     round.started = true;
+    this.persist(round);
     console.log(`round ${roundId} started (entries locked, root committed onchain)`);
 
     // Entries are locked now, so the entrant list is final. Loading it is best-effort and
@@ -113,6 +120,7 @@ export class RoundManager {
         const entrants = await readEntrants(round.roundId);
         round.entrants = new Set(entrants.map(normalizeAddress));
         round.entrantsLoaded = true;
+        this.persist(round);
         console.log(`round ${round.roundId}: ${round.entrants.size} entrants cached`);
         return;
       } catch (err) {
@@ -249,10 +257,95 @@ export class RoundManager {
         // itself would print "[object Object]".
         const receipt = await revealBoardOnChain(roundId, round.board.isMine, round.board.boardSeed);
         console.log(`revealBoard tx for round ${roundId}: ${receipt.transactionHash}`);
+        // The layout is public onchain now, so the stored secret has no further value.
+        deleteRound(roundId.toString());
       } catch (err) {
         console.error(`revealBoard failed for round ${roundId}`, err);
       }
     });
+  }
+
+  /** Writes the round's irrecoverable state (layout + seed) to disk. Best-effort: a store
+   *  failure must not take down a round that is otherwise fine, but it is loud, because it
+   *  means the next restart will strand this pool. */
+  private persist(round: ActiveRound): void {
+    try {
+      saveRound({
+        roundId: round.roundId.toString(),
+        width: round.board.width,
+        height: round.board.height,
+        isMine: round.board.isMine,
+        boardSeed: round.board.boardSeed.toString(),
+        started: round.started,
+        entrants: [...round.entrants],
+      });
+    } catch (err) {
+      console.error(
+        `round ${round.roundId}: FAILED to persist board layout — a restart will strand this round`,
+        err,
+      );
+    }
+  }
+
+  /**
+   * Rebuilds in-memory rounds from the store at startup. Call before serving traffic.
+   *
+   * For any round already committed onchain the rebuilt Merkle root is checked against the
+   * root the contract holds. A mismatch means the stored layout is not the one that was
+   * committed — every proof from it would be rejected — so the round is dropped rather than
+   * served, loudly.
+   */
+  async restore(): Promise<void> {
+    const persisted = loadRounds();
+    if (persisted.length === 0) return;
+
+    let restored = 0;
+    for (const p of persisted) {
+      const roundId = BigInt(p.roundId);
+      try {
+        const board = rebuildBoard({
+          width: p.width,
+          height: p.height,
+          isMine: p.isMine,
+          boardSeed: BigInt(p.boardSeed),
+        });
+
+        if (p.started) {
+          const info = await readRoundInfo(roundId);
+          const onchainRoot = info[6];
+          const state = Number(info[7]);
+          if (onchainRoot !== board.root) {
+            console.error(
+              `round ${roundId}: stored layout does not match the committed root ` +
+                `(onchain ${onchainRoot}, rebuilt ${board.root}) — dropping it`,
+            );
+            continue;
+          }
+          // Finished/Cancelled rounds need nothing more from this process, and their layout
+          // is already public onchain.
+          if (state === 2 || state === 3) {
+            deleteRound(p.roundId);
+            continue;
+          }
+        }
+
+        this.rounds.set(roundId, {
+          roundId,
+          board,
+          started: p.started,
+          entrants: new Set(p.entrants.map(normalizeAddress)),
+          entrantsLoaded: p.entrants.length > 0,
+          revealed: new Set(), // re-learned from TileRevealed; the chain stays authoritative
+          frozenUntil: new Map(), // freezes are deliberately not persisted — a restart forgives them
+          flags: new Map(),
+          sockets: new Map(),
+        });
+        restored++;
+      } catch (err) {
+        console.error(`round ${roundId}: could not restore from store`, err);
+      }
+    }
+    console.log(`restored ${restored} round(s) from ${storeDir}`);
   }
 
   private mustGet(roundId: bigint): ActiveRound {

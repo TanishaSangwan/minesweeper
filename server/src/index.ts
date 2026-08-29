@@ -11,6 +11,9 @@ app.use(cors());
 app.use(express.json());
 
 const rounds = new RoundManager();
+// Bring back any round that was live when this process last stopped, before accepting
+// traffic — otherwise its board layout is gone and its pool is stranded (see store.ts).
+await rounds.restore();
 rounds.wireChainEvents();
 
 // Admin-only in a real deploy (put behind auth). Opens a round for entries and generates the
