@@ -1,4 +1,13 @@
-import { createPublicClient, createWalletClient, defineChain, http, webSocket, type Hex } from "viem";
+import {
+  createPublicClient,
+  createWalletClient,
+  defineChain,
+  http,
+  parseEventLogs,
+  webSocket,
+  type Hex,
+  type TransactionReceipt,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { minesweeperTournamentAbi } from "./abi.js";
 import { env } from "./env.js";
@@ -43,10 +52,16 @@ export const contract = {
 // are trusted operator-only admin calls (not exposed to players), so rather than hardcoding
 // limits we can't verify without a compiled build, we estimate once and add a small 10%
 // buffer per the skill's guidance, instead of trusting a wallet's post-revert fallback.
+//
+// Waits for the receipt before returning: these admin calls are sequenced (e.g. startRound
+// must observe createRound's effects), and Monad still has ordinary block-inclusion latency
+// between "submitted" and "readable" — firing the next call before the first is mined reads
+// a default-zero-valued round, which is exactly the bug this used to have (startRound divided
+// by a zero totalSafeTiles because the createRound it depended on hadn't landed yet).
 async function writeWithBufferedGas(
   functionName: "createRound" | "startRound" | "cancelRound" | "revealBoard",
   args: readonly unknown[],
-) {
+): Promise<TransactionReceipt> {
   const estimate = await publicClient.estimateContractGas({
     ...contract,
     functionName,
@@ -61,22 +76,34 @@ async function writeWithBufferedGas(
     account: operatorAccount,
     gas,
   } as never);
-  return walletClient.writeContract(request);
+  const hash = await walletClient.writeContract(request);
+  return publicClient.waitForTransactionReceipt({ hash });
 }
 
-export async function createRoundOnChain(entryFee: bigint, totalSafeTiles: number, minPlayers: number) {
-  return writeWithBufferedGas("createRound", [entryFee, totalSafeTiles, minPlayers]);
+export async function createRoundOnChain(
+  entryFee: bigint,
+  totalSafeTiles: number,
+  minPlayers: number,
+): Promise<bigint> {
+  const receipt = await writeWithBufferedGas("createRound", [entryFee, totalSafeTiles, minPlayers]);
+  const [event] = parseEventLogs({ abi: minesweeperTournamentAbi, eventName: "RoundCreated", logs: receipt.logs });
+  if (!event) throw new Error(`createRound tx ${receipt.transactionHash} did not emit RoundCreated`);
+  return event.args.roundId;
 }
 
-export async function startRoundOnChain(roundId: bigint, merkleRoot: Hex) {
+export async function startRoundOnChain(roundId: bigint, merkleRoot: Hex): Promise<TransactionReceipt> {
   return writeWithBufferedGas("startRound", [roundId, merkleRoot]);
 }
 
-export async function cancelRoundOnChain(roundId: bigint) {
+export async function cancelRoundOnChain(roundId: bigint): Promise<TransactionReceipt> {
   return writeWithBufferedGas("cancelRound", [roundId]);
 }
 
-export async function revealBoardOnChain(roundId: bigint, isMine: boolean[], boardSeed: bigint) {
+export async function revealBoardOnChain(
+  roundId: bigint,
+  isMine: boolean[],
+  boardSeed: bigint,
+): Promise<TransactionReceipt> {
   return writeWithBufferedGas("revealBoard", [roundId, isMine, boardSeed]);
 }
 

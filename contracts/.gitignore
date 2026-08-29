@@ -2,3 +2,5 @@ cache/
 out/
 broadcast/
 .env
+.deploy-init-code.txt
+.deploy-args.json

@@ -174,6 +174,15 @@ contract MinesweeperTournamentTest is Test {
         tournament.startRound(roundId, root);
     }
 
+    function test_NonEntrantCannotRevealTile() public {
+        uint256 roundId = _createAndStartRound();
+        address stranger = address(0xBAD);
+
+        vm.prank(stranger);
+        vm.expectRevert(MinesweeperTournament.NotEntered.selector);
+        tournament.revealSafeTile(roundId, 0, _nonce(0), _proof(0));
+    }
+
     function test_WrongEntryFeeReverts() public {
         uint256 roundId = tournament.createRound(1 ether, TOTAL_SAFE, 2);
         vm.prank(alice);

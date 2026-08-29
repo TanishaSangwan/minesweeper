@@ -26,6 +26,7 @@ export type ServerMessage =
 interface ActiveRound {
   roundId: bigint;
   board: GeneratedBoard;
+  started: boolean; // true once startRound has been confirmed onchain (entries locked, root committed)
   revealed: Set<number>; // mirrors onchain TileRevealed truth
   frozenUntil: Map<Address, number>; // epoch ms
   flags: Map<number, Address>;
@@ -43,21 +44,19 @@ interface ActiveRound {
 export class RoundManager {
   private rounds = new Map<bigint, ActiveRound>();
 
-  async createAndStart(config: BoardConfig, entryFeeWei: bigint, minPlayers: number): Promise<bigint> {
+  /** Opens a round for entries. Generates the board immediately (kept secret in memory) but
+   *  deliberately does not commit its root onchain yet — see `startRound`. Waits for the
+   *  createRound transaction to actually be mined (not just submitted) before returning,
+   *  since `startRound` needs to observe this round's existence onchain. */
+  async createRound(config: BoardConfig, entryFeeWei: bigint, minPlayers: number): Promise<bigint> {
     const board = generateBoard(config);
-
-    const createHash = await createRoundOnChain(entryFeeWei, board.totalSafeTiles, minPlayers);
-    console.log(`createRound tx: ${createHash}`);
-    // In a real deploy, read the roundId back out of the RoundCreated event/receipt instead
-    // of assuming it's sequential — left simple here since this operator is the only writer.
-    const roundId = BigInt(this.rounds.size);
-
-    const startHash = await startRoundOnChain(roundId, board.root);
-    console.log(`startRound tx: ${startHash}`);
+    const roundId = await createRoundOnChain(entryFeeWei, board.totalSafeTiles, minPlayers);
+    console.log(`round ${roundId} created (createRound confirmed onchain)`);
 
     this.rounds.set(roundId, {
       roundId,
       board,
+      started: false,
       revealed: new Set(),
       frozenUntil: new Map(),
       flags: new Map(),
@@ -65,6 +64,17 @@ export class RoundManager {
     });
 
     return roundId;
+  }
+
+  /** Locks entries and commits the board's Merkle root onchain — call once enough players
+   *  have entered. The contract enforces `minPlayers` itself and reverts otherwise; that
+   *  revert propagates to the caller rather than being swallowed. */
+  async startRound(roundId: bigint): Promise<void> {
+    const round = this.mustGet(roundId);
+    if (round.started) throw new Error(`round ${roundId} already started`);
+    await startRoundOnChain(roundId, round.board.root);
+    round.started = true;
+    console.log(`round ${roundId} started (entries locked, root committed onchain)`);
   }
 
   /** Dimensions + tile counts only — never the mine layout itself. Safe to expose publicly
@@ -91,6 +101,9 @@ export class RoundManager {
    *  hit is only ever sent back to the clicking player, never broadcast. */
   handleClick(roundId: bigint, player: Address, tileIndex: number): ServerMessage {
     const round = this.mustGet(roundId);
+    if (!round.started) {
+      return { type: "error", message: "round has not started yet — entries are still open" };
+    }
     const now = Date.now();
 
     const frozenUntil = round.frozenUntil.get(player) ?? 0;

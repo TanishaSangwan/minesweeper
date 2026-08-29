@@ -69,6 +69,7 @@ contract MinesweeperTournament is Ownable, ReentrancyGuard {
     error AlreadyEntered();
     error NotEnoughPlayers();
     error TileAlreadyRevealed();
+    error NotEntered();
     error InvalidProof();
     error BoardMismatch();
     error TransferFailed();
@@ -133,9 +134,10 @@ contract MinesweeperTournament is Ownable, ReentrancyGuard {
     }
 
     /// @notice Reveals one safe tile and pays out instantly. Reverts if the tile is a mine,
-    ///         already claimed, or the proof doesn't match the committed root — so only a
-    ///         genuinely safe, not-yet-claimed tile can ever pay out. Whichever valid
-    ///         transaction lands first wins the tile; every later one reverts.
+    ///         already claimed, the caller never paid the entry fee, or the proof doesn't
+    ///         match the committed root — so only a genuinely safe, not-yet-claimed tile
+    ///         revealed by an actual entrant can ever pay out. Whichever valid transaction
+    ///         lands first wins the tile; every later one reverts.
     function revealSafeTile(uint256 roundId, uint16 tileIndex, uint256 nonce, bytes32[] calldata proof)
         external
         nonReentrant
@@ -143,6 +145,7 @@ contract MinesweeperTournament is Ownable, ReentrancyGuard {
         Round storage r = rounds[roundId];
         if (r.state != RoundState.InProgress) revert InvalidState();
         if (tileRevealed[roundId][tileIndex]) revert TileAlreadyRevealed();
+        if (!hasEntered[roundId][msg.sender]) revert NotEntered();
 
         bytes32 leaf = keccak256(abi.encode(tileIndex, false, nonce));
         if (!MerkleProof.verify(proof, r.merkleRoot, leaf)) revert InvalidProof();
