@@ -82,10 +82,18 @@ async function writeWithBufferedGas(
 
 export async function createRoundOnChain(
   entryFee: bigint,
+  width: number,
+  height: number,
   totalSafeTiles: number,
   minPlayers: number,
 ): Promise<bigint> {
-  const receipt = await writeWithBufferedGas("createRound", [entryFee, totalSafeTiles, minPlayers]);
+  const receipt = await writeWithBufferedGas("createRound", [
+    entryFee,
+    width,
+    height,
+    totalSafeTiles,
+    minPlayers,
+  ]);
   const [event] = parseEventLogs({ abi: minesweeperTournamentAbi, eventName: "RoundCreated", logs: receipt.logs });
   if (!event) throw new Error(`createRound tx ${receipt.transactionHash} did not emit RoundCreated`);
   return event.args.roundId;
@@ -111,17 +119,37 @@ export async function readRoundInfo(roundId: bigint) {
   return publicClient.readContract({ ...contract, functionName: "roundInfo", args: [roundId] });
 }
 
+/** The round's entrants, straight from the contract. Read once at `startRound`: the contract
+ *  only accepts `enter` while a round is Open, so by the time entries are locked this list is
+ *  final and can't drift — no event subscription to miss. */
+export async function readEntrants(roundId: bigint): Promise<readonly Hex[]> {
+  return publicClient.readContract({ ...contract, functionName: "entrantsOf", args: [roundId] });
+}
+
 export function watchTileRevealed(
-  onEvent: (args: { roundId: bigint; tileIndex: number; player: Hex; reward: bigint }) => void,
+  onEvent: (args: {
+    roundId: bigint;
+    tileIndex: number;
+    adjacentMines: number;
+    player: Hex;
+    reward: bigint;
+  }) => void,
 ) {
   return wsClient.watchContractEvent({
     ...contract,
     eventName: "TileRevealed",
     onLogs: (logs) => {
       for (const log of logs) {
-        const { roundId, tileIndex, player, reward } = log.args;
+        const { roundId, tileIndex, adjacentMines, player, reward } = log.args;
         if (roundId === undefined || tileIndex === undefined || !player || reward === undefined) continue;
-        onEvent({ roundId, tileIndex: Number(tileIndex), player, reward });
+        if (adjacentMines === undefined) continue;
+        onEvent({
+          roundId,
+          tileIndex: Number(tileIndex),
+          adjacentMines: Number(adjacentMines),
+          player,
+          reward,
+        });
       }
     },
   });

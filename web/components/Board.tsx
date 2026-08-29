@@ -29,6 +29,7 @@ export function Board({ width, height, revealed, flags, myAddress, frozen, onRev
             key={index}
             index={index}
             revealed={Boolean(tile)}
+            adjacentMines={tile?.adjacentMines ?? 0}
             revealedByMe={tile?.player === myAddress}
             flaggedBy={flags.get(index) ?? null}
             disabled={frozen}

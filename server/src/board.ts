@@ -20,6 +20,26 @@ function randomBoardSeed(): bigint {
   return BigInt("0x" + randomBytes(32).toString("hex"));
 }
 
+/** Mines among each tile's up-to-8 neighbours on a row-major `width` x `height` grid — the
+ *  classic Minesweeper hint. Mirrors `_adjacentMines` in MinesweeperTournament.sol exactly
+ *  (edges clamp, so a corner has 3 neighbours); the two must change together, or `revealBoard`
+ *  will reject the published board at the end of the round. Counts are computed for mine tiles
+ *  too, so every leaf in the tree is well-defined. */
+export function computeAdjacentMines(isMine: boolean[], width: number, height: number): number[] {
+  return isMine.map((_, index) => {
+    const x = index % width;
+    const y = Math.floor(index / width);
+    let count = 0;
+    for (let ny = Math.max(0, y - 1); ny <= Math.min(height - 1, y + 1); ny++) {
+      for (let nx = Math.max(0, x - 1); nx <= Math.min(width - 1, x + 1); nx++) {
+        if (nx === x && ny === y) continue;
+        if (isMine[ny * width + nx]) count++;
+      }
+    }
+    return count;
+  });
+}
+
 /** Uniformly random mine placement via partial Fisher-Yates over tile indices. */
 function placeMines(totalTiles: number, mineCount: number): boolean[] {
   const isMine = new Array<boolean>(totalTiles).fill(false);
@@ -38,8 +58,9 @@ export function generateBoard({ width, height, mineCount }: BoardConfig): Genera
     throw new Error(`mineCount must be between 1 and ${totalTiles - 1}`);
   }
   const isMine = placeMines(totalTiles, mineCount);
+  const adjacentMines = computeAdjacentMines(isMine, width, height);
   const boardSeed = randomBoardSeed();
-  const commitment = commitBoard(isMine, boardSeed);
+  const commitment = commitBoard(isMine, adjacentMines, boardSeed);
 
   return {
     ...commitment,

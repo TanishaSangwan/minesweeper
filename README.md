@@ -16,18 +16,25 @@ web/         Next.js + wagmi frontend
 
 ## Deployed (Monad testnet)
 
-`MinesweeperTournament`: [`0xb5018a829a81de6c1d37343428dac5503ebd8db2`](https://testnet.monadscan.com/address/0xb5018a829a81de6c1d37343428dac5503ebd8db2)
-— verified on Monadscan and MonadVision. Deployed via CREATE2 through the canonical CreateX
-factory using an Alchemy Agent Wallet session (no raw key ever touched disk for the deploy
-itself). `owner()` is a separate operator keypair generated locally for `server/`'s ongoing
-admin calls (`createRound`/`startRound`/`revealBoard`) — see `server/.env` (gitignored).
+`MinesweeperTournament`: [`0x1970bA7FceE762a529ED61D22880859F7a0E3Ab7`](https://testnet.monadscan.com/address/0x1970bA7FceE762a529ED61D22880859F7a0E3Ab7)
+— verified on Monadscan ("Pass") and [MonadVision](https://testnet.monadvision.com/address/0x1970bA7FceE762a529ED61D22880859F7a0E3Ab7)
+("perfect match"). Deployed via CREATE2 through the canonical CreateX factory using an Alchemy
+Agent Wallet session (no raw key ever touched disk for the deploy itself). `owner()` is a
+separate operator keypair generated locally for `server/`'s ongoing admin calls
+(`createRound`/`startRound`/`revealBoard`) — see `server/.env` (gitignored).
 
-An earlier deploy at `0x13908659c9cd15f74619def7bddb5d1a2dcf4bd1` is superseded — end-to-end
-testing against it caught a real bug (`revealSafeTile` never checked the caller had actually
-paid the entry fee) and a race (firing `startRound` immediately after `createRound` without
-waiting for confirmation read a not-yet-mined, zero-valued round and reverted). Both are fixed
-in the contract and in `server/src/roundManager.ts`/`chain.ts`; the old address is abandoned,
-not upgraded — nothing of value was ever at risk on it since it's testnet.
+This is the first deploy carrying the adjacent-mine hint: safe tiles now publish their
+neighbour count to every player while the reward still goes only to the revealer. That changed
+the committed Merkle leaf schema and is ABI-breaking, so the two earlier addresses cannot be
+reused.
+
+Superseded, both abandoned rather than upgraded (testnet, nothing of value at risk):
+- `0xb5018a829a81de6c1d37343428dac5503ebd8db2` — predates the adjacent-mine hint.
+- `0x13908659c9cd15f74619def7bddb5d1a2dcf4bd1` — end-to-end testing against it caught a real
+  bug (`revealSafeTile` never checked the caller had actually paid the entry fee) and a race
+  (firing `startRound` immediately after `createRound` without waiting for confirmation read a
+  not-yet-mined, zero-valued round and reverted). Both are fixed in the contract and in
+  `server/src/roundManager.ts`/`chain.ts`.
 
 Note if you ever redeploy: CreateX guards the salt you pass it (it does not use it raw), so
 the actual deployed address will differ from a naive `computeCreate2Address(salt, initCodeHash)`
@@ -98,7 +105,8 @@ Left as follow-ups (called out in-code where relevant, not silently skipped):
   once that hook's source is confirmed.
 - **WS auth**: the broker's `/ws?...&player=0x..` trusts the client-supplied address — needs a
   signed-message check before this is anything but a demo (see `server/README.md`).
-- ~~**Deploy + verify**~~: done — see "Deployed" above.
+- ~~**Deploy + verify**~~: done — current address carries the adjacent-mine hint and is
+  verified on both explorers. See "Deployed" above.
 - **shadcn**: skipped in favor of plain Tailwind, to avoid depending on `npx shadcn init`
   while npm wasn't available; fine to add later.
 - **Operator trust boundary**: the backend still *generates* the board — the onchain scheme
