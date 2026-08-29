@@ -35,7 +35,7 @@ Set these variables (`railway variables --set 'K=V'`, or the dashboard):
 | `ROUND_STORE_DIR` | `/data/rounds` |
 | `AUTO_ROUND` | `true` — otherwise nobody can start a round |
 | `AUTO_ROUND_MIN_PLAYERS` | `2` |
-| `AUTO_ROUND_ENTRY_FEE_WEI` | `10000000000000000` (0.01 MON) |
+| `AUTO_ROUND_ENTRY_FEE_WEI` | `100000000000000000` (0.1 MON) |
 
 Then `railway domain` for a public URL.
 

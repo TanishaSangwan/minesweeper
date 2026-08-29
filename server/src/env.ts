@@ -25,6 +25,9 @@ export const env = {
   autoRoundWidth: Number(process.env.AUTO_ROUND_WIDTH ?? "4"),
   autoRoundHeight: Number(process.env.AUTO_ROUND_HEIGHT ?? "4"),
   autoRoundMines: Number(process.env.AUTO_ROUND_MINES ?? "10"),
-  autoRoundEntryFeeWei: BigInt(process.env.AUTO_ROUND_ENTRY_FEE_WEI ?? "10000000000000000"),
+  // 0.1 MON. Sized so the reward beats gas: with 2 players over 6 safe tiles that is
+  // 0.033 MON per tile against ~0.011 MON to claim one. A lower fee makes every reveal a
+  // guaranteed loss, which reads as the app stealing from players.
+  autoRoundEntryFeeWei: BigInt(process.env.AUTO_ROUND_ENTRY_FEE_WEI ?? "100000000000000000"),
   autoRoundMinPlayers: Number(process.env.AUTO_ROUND_MIN_PLAYERS ?? "2"),
 };
