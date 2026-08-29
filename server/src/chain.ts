@@ -155,6 +155,22 @@ export function watchTileRevealed(
   });
 }
 
+/** Fires on every `enter`. Drives auto-start: a public deployment has nobody to run the
+ *  owner-only `startRound` by hand. */
+export function watchEntered(onEvent: (args: { roundId: bigint; player: Hex }) => void) {
+  return wsClient.watchContractEvent({
+    ...contract,
+    eventName: "Entered",
+    onLogs: (logs) => {
+      for (const log of logs) {
+        const { roundId, player } = log.args;
+        if (roundId === undefined || !player) continue;
+        onEvent({ roundId, player });
+      }
+    },
+  });
+}
+
 export function watchRoundFinished(onEvent: (args: { roundId: bigint }) => void) {
   return wsClient.watchContractEvent({
     ...contract,

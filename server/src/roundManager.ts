@@ -7,6 +7,7 @@ import {
   readRoundInfo,
   revealBoardOnChain,
   startRoundOnChain,
+  watchEntered,
   watchRoundFinished,
   watchTileRevealed,
 } from "./chain.js";
@@ -38,6 +39,7 @@ interface ActiveRound {
   started: boolean; // true once startRound has been confirmed onchain (entries locked, root committed)
   entrants: Set<Address>; // lowercased; read off the contract at startRound, final thereafter
   entrantsLoaded: boolean; // false until that read succeeds — an empty set is not "no entrants"
+  minPlayers: number; // needed by lobby mode to know when to auto-start
   revealed: Set<number>; // mirrors onchain TileRevealed truth
   frozenUntil: Map<Address, number>; // epoch ms
   flags: Map<number, Address>;
@@ -59,6 +61,9 @@ export class RoundManager {
    *  deliberately does not commit its root onchain yet — see `startRound`. Waits for the
    *  createRound transaction to actually be mined (not just submitted) before returning,
    *  since `startRound` needs to observe this round's existence onchain. */
+  /** Serialises auto-start so two Entered events can't both fire startRound. */
+  private starting = new Set<bigint>();
+
   async createRound(config: BoardConfig, entryFeeWei: bigint, minPlayers: number): Promise<bigint> {
     const board = generateBoard(config);
     // Dimensions go onchain because `revealBoard` recomputes every tile's neighbour count
@@ -78,6 +83,7 @@ export class RoundManager {
       started: false,
       entrants: new Set(),
       entrantsLoaded: false,
+      minPlayers,
       revealed: new Set(),
       frozenUntil: new Map(),
       flags: new Map(),
@@ -232,7 +238,51 @@ export class RoundManager {
 
   /** Subscribes to onchain truth once, at startup, and keeps every active round's mirror
    *  (and connected clients) in sync with it. */
+  /** Lobby mode: keep exactly one Open round available, and start it once enough players
+   *  have entered. A public deployment has nobody to run the owner-only calls by hand. */
+  async ensureOpenRound(): Promise<void> {
+    if (!env.autoRound) return;
+    for (const round of this.rounds.values()) {
+      if (!round.started) return; // one already waiting for players
+    }
+    try {
+      const roundId = await this.createRound(
+        { width: env.autoRoundWidth, height: env.autoRoundHeight, mineCount: env.autoRoundMines },
+        env.autoRoundEntryFeeWei,
+        env.autoRoundMinPlayers,
+      );
+      console.log(`lobby: opened round ${roundId}, waiting for ${env.autoRoundMinPlayers} players`);
+    } catch (err) {
+      console.error("lobby: could not open a round", err);
+    }
+  }
+
+  private async maybeAutoStart(roundId: bigint): Promise<void> {
+    if (!env.autoRound) return;
+    const round = this.rounds.get(roundId);
+    if (!round || round.started || this.starting.has(roundId)) return;
+
+    this.starting.add(roundId);
+    try {
+      const entrants = await readEntrants(roundId);
+      if (entrants.length < round.minPlayers) {
+        console.log(`lobby: round ${roundId} has ${entrants.length}/${round.minPlayers} players`);
+        return;
+      }
+      await this.startRound(roundId);
+      console.log(`lobby: auto-started round ${roundId}`);
+    } catch (err) {
+      console.error(`lobby: auto-start failed for round ${roundId}`, err);
+    } finally {
+      this.starting.delete(roundId);
+    }
+  }
+
   wireChainEvents() {
+    watchEntered(({ roundId }) => {
+      void this.maybeAutoStart(roundId);
+    });
+
     watchTileRevealed(({ roundId, tileIndex, adjacentMines, player, reward }) => {
       const round = this.rounds.get(roundId);
       if (!round) return;
@@ -259,6 +309,7 @@ export class RoundManager {
         console.log(`revealBoard tx for round ${roundId}: ${receipt.transactionHash}`);
         // The layout is public onchain now, so the stored secret has no further value.
         deleteRound(roundId.toString());
+        void this.ensureOpenRound();
       } catch (err) {
         console.error(`revealBoard failed for round ${roundId}`, err);
       }
@@ -277,6 +328,7 @@ export class RoundManager {
         isMine: round.board.isMine,
         boardSeed: round.board.boardSeed.toString(),
         started: round.started,
+        minPlayers: round.minPlayers,
         entrants: [...round.entrants],
       });
     } catch (err) {
@@ -335,6 +387,7 @@ export class RoundManager {
           started: p.started,
           entrants: new Set(p.entrants.map(normalizeAddress)),
           entrantsLoaded: p.entrants.length > 0,
+          minPlayers: p.minPlayers ?? 1,
           revealed: new Set(), // re-learned from TileRevealed; the chain stays authoritative
           frozenUntil: new Map(), // freezes are deliberately not persisted — a restart forgives them
           flags: new Map(),

@@ -16,6 +16,8 @@ const rounds = new RoundManager();
 // traffic — otherwise its board layout is gone and its pool is stranded (see store.ts).
 await rounds.restore();
 rounds.wireChainEvents();
+// Lobby mode (AUTO_ROUND=true): make sure a joinable round exists at boot.
+await rounds.ensureOpenRound();
 
 // Admin-only in a real deploy (put behind auth). Opens a round for entries and generates the
 // board (kept secret in memory) — does NOT commit the root onchain yet, so players still have

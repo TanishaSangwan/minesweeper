@@ -29,6 +29,7 @@ export interface PersistedRound {
   isMine: boolean[];
   boardSeed: string; // bigint as decimal string
   started: boolean;
+  minPlayers: number;
   entrants: string[];
 }
 
