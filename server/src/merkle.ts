@@ -1,11 +1,11 @@
 // Mirrors MinesweeperTournament.sol exactly:
 //   nonce_i = uint256(keccak256(abi.encode(boardSeed, i)))
-//   leaf_i  = keccak256(abi.encode(tileIndex, isMine, nonce))
+//   leaf_i  = keccak256(abi.encode(tileIndex, isMine, adjacentMines, nonce))
 //   node    = sorted-pair keccak256(abi.encodePacked(a, b)), odd node promoted unhashed
 // Solidity's abi.encode pads every uintN to a 32-byte word identically regardless of
 // declared width, so using `uint256` for every integer here produces byte-identical
-// encodings to the contract's uint16 tileIndex — see the contract's NatSpec for why this is
-// safe rather than a mismatch.
+// encodings to the contract's uint16 tileIndex and uint8 adjacentMines — see the contract's
+// NatSpec for why this is safe rather than a mismatch.
 import { encodeAbiParameters, encodePacked, keccak256, parseAbiParameters, type Hex } from "viem";
 
 export function nonceForTile(boardSeed: bigint, tileIndex: number): bigint {
@@ -16,10 +16,16 @@ export function nonceForTile(boardSeed: bigint, tileIndex: number): bigint {
   return BigInt(keccak256(encoded));
 }
 
-export function leafHash(tileIndex: number, isMine: boolean, nonce: bigint): Hex {
-  const encoded = encodeAbiParameters(parseAbiParameters("uint256, bool, uint256"), [
+export function leafHash(
+  tileIndex: number,
+  isMine: boolean,
+  adjacentMines: number,
+  nonce: bigint,
+): Hex {
+  const encoded = encodeAbiParameters(parseAbiParameters("uint256, bool, uint256, uint256"), [
     BigInt(tileIndex),
     isMine,
+    BigInt(adjacentMines),
     nonce,
   ]);
   return keccak256(encoded);
@@ -61,16 +67,26 @@ export function proofFor(leaves: Hex[], index: number): Hex[] {
 
 export interface BoardCommitment {
   isMine: boolean[];
+  adjacentMines: number[];
   boardSeed: bigint;
   nonces: bigint[];
   leaves: Hex[];
   root: Hex;
 }
 
-/** Builds the full commitment for a generated board: nonces, leaves, root, and per-tile proofs. */
-export function commitBoard(isMine: boolean[], boardSeed: bigint): BoardCommitment {
+/** Builds the full commitment for a generated board: nonces, leaves, root, and per-tile proofs.
+ *  `adjacentMines` is committed alongside `isMine` so the hint a player is served for a tile is
+ *  bound to the root and cannot be altered mid-round — see the contract's NatSpec. */
+export function commitBoard(
+  isMine: boolean[],
+  adjacentMines: number[],
+  boardSeed: bigint,
+): BoardCommitment {
+  if (adjacentMines.length !== isMine.length) {
+    throw new Error("adjacentMines and isMine must describe the same number of tiles");
+  }
   const nonces = isMine.map((_, i) => nonceForTile(boardSeed, i));
-  const leaves = isMine.map((mine, i) => leafHash(i, mine, nonces[i]));
+  const leaves = isMine.map((mine, i) => leafHash(i, mine, adjacentMines[i], nonces[i]));
   const root = computeRoot(leaves);
-  return { isMine, boardSeed, nonces, leaves, root };
+  return { isMine, adjacentMines, boardSeed, nonces, leaves, root };
 }

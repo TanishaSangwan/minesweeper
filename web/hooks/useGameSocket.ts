@@ -4,11 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { brokerWsUrl } from "@/lib/contract";
 
 export type ServerMessage =
-  | { type: "safe"; tileIndex: number; nonce: string; proof: `0x${string}`[] }
+  | { type: "safe"; tileIndex: number; adjacentMines: number; nonce: string; proof: `0x${string}`[] }
   | { type: "mine-hit"; tileIndex: number; freezeMs: number; freezeUntil: number }
   | { type: "frozen"; remainingMs: number }
   | { type: "already-revealed"; tileIndex: number }
-  | { type: "tile-revealed"; tileIndex: number; player: `0x${string}`; reward: string }
+  | { type: "tile-revealed"; tileIndex: number; adjacentMines: number; player: `0x${string}`; reward: string }
   | { type: "flag"; tileIndex: number; player: `0x${string}`; flagged: boolean }
   | { type: "round-finished" }
   | { type: "error"; message: string };

@@ -20,6 +20,8 @@ export const minesweeperTournamentAbi = [
     name: "createRound",
     inputs: [
       { name: "entryFee", type: "uint256" },
+      { name: "width", type: "uint16" },
+      { name: "height", type: "uint16" },
       { name: "totalSafeTiles", type: "uint16" },
       { name: "minPlayers", type: "uint16" },
     ],
@@ -56,6 +58,7 @@ export const minesweeperTournamentAbi = [
     inputs: [
       { name: "roundId", type: "uint256" },
       { name: "tileIndex", type: "uint16" },
+      { name: "adjacentMines", type: "uint8" },
       { name: "nonce", type: "uint256" },
       { name: "proof", type: "bytes32[]" },
     ],
@@ -86,6 +89,8 @@ export const minesweeperTournamentAbi = [
       { name: "rewardPerTile", type: "uint256" },
       { name: "merkleRoot", type: "bytes32" },
       { name: "state", type: "uint8" },
+      { name: "width", type: "uint16" },
+      { name: "height", type: "uint16" },
     ],
     stateMutability: "view",
   },
@@ -115,6 +120,26 @@ export const minesweeperTournamentAbi = [
   },
   {
     type: "function",
+    name: "tileHint",
+    inputs: [
+      { name: "", type: "uint256" },
+      { name: "", type: "uint16" },
+    ],
+    outputs: [{ type: "uint8" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "revealedTiles",
+    inputs: [{ name: "roundId", type: "uint256" }],
+    outputs: [
+      { name: "revealed", type: "bool[]" },
+      { name: "hints", type: "uint8[]" },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "tileRevealed",
     inputs: [
       { name: "", type: "uint256" },
@@ -136,6 +161,8 @@ export const minesweeperTournamentAbi = [
     inputs: [
       { name: "roundId", type: "uint256", indexed: true },
       { name: "entryFee", type: "uint256", indexed: false },
+      { name: "width", type: "uint16", indexed: false },
+      { name: "height", type: "uint16", indexed: false },
       { name: "totalSafeTiles", type: "uint16", indexed: false },
       { name: "minPlayers", type: "uint16", indexed: false },
     ],
@@ -170,6 +197,7 @@ export const minesweeperTournamentAbi = [
       { name: "roundId", type: "uint256", indexed: true },
       { name: "tileIndex", type: "uint16", indexed: true },
       { name: "player", type: "address", indexed: true },
+      { name: "adjacentMines", type: "uint8", indexed: false },
       { name: "reward", type: "uint256", indexed: false },
     ],
   },
@@ -191,7 +219,9 @@ export const minesweeperTournamentAbi = [
   { type: "error", name: "AlreadyEntered", inputs: [] },
   { type: "error", name: "NotEnoughPlayers", inputs: [] },
   { type: "error", name: "TileAlreadyRevealed", inputs: [] },
+  { type: "error", name: "NotEntered", inputs: [] },
   { type: "error", name: "InvalidProof", inputs: [] },
   { type: "error", name: "BoardMismatch", inputs: [] },
   { type: "error", name: "TransferFailed", inputs: [] },
+  { type: "error", name: "InvalidDimensions", inputs: [] },
 ] as const;
