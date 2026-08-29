@@ -81,7 +81,7 @@ curl -X POST http://localhost:8787/api/rounds \
 curl -X POST http://localhost:8787/api/rounds/<roundId>/start
 ```
 
-## What's built vs. what's left
+## What's built and what's left
 
 Built: the contract (+ tests), the full commit-reveal fairness scheme, the broker (board gen,
 proof-serving, freeze/private-message logic, chain-event-driven board sync), and a working
