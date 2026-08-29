@@ -55,7 +55,7 @@ curl -X POST http://localhost:8787/api/rounds \
   -d '{"width":9,"height":9,"mineCount":10,"entryFeeWei":"10000000000000000","minPlayers":2}'
 ```
 
-## What's built vs. what's left
+## What's built and what's left
 
 Built: the contract (+ tests), the full commit-reveal fairness scheme, the broker (board gen,
 proof-serving, freeze/private-message logic, chain-event-driven board sync), and a working
