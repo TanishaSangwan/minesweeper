@@ -60,6 +60,34 @@ export default function Home() {
     query: { enabled: Boolean(sessionAddress), refetchInterval: 4000 },
   });
   const { sendTransaction: fundSession, isPending: isFunding } = useSendTransaction();
+  const [isCashingOut, setIsCashingOut] = useState(false);
+
+  // Winnings are paid straight to the session wallet by revealSafeTile, so they sit in a
+  // keypair in localStorage rather than the player's real wallet. Without this the only way
+  // out is exporting the raw key into MetaMask, which is both hostile and a bad habit.
+  // Leaves a little behind for the gas this very transaction costs.
+  const cashOut = useCallback(async () => {
+    if (!session || !address || !sessionBalance) return;
+    setIsCashingOut(true);
+    try {
+      const gasReserve = parseEther("0.005");
+      if (sessionBalance.value <= gasReserve) {
+        setStatus("nothing to cash out yet");
+        return;
+      }
+      const hash = await session.client.sendTransaction({
+        account: session.account,
+        chain: monadTestnet,
+        to: address,
+        value: sessionBalance.value - gasReserve,
+      });
+      setStatus(`cashed out to ${address.slice(0, 6)}…${address.slice(-4)} — tx ${hash.slice(0, 10)}…`);
+    } catch (err) {
+      setStatus(`cash out failed: ${(err as Error).message.split("\n")[0]}`);
+    } finally {
+      setIsCashingOut(false);
+    }
+  }, [session, address, sessionBalance]);
 
   const { data: roundInfo } = useReadContract({
     ...tournamentContract,
@@ -109,7 +137,7 @@ export default function Home() {
           break;
         case "mine-hit":
           setStatus(null);
-          setFreezeUntil(msg.freezeUntil);
+          setFreezeUntil(Date.now() + msg.freezeMs);
           break;
         case "already-revealed":
           setStatus(`Tile ${msg.tileIndex} was already revealed by someone else.`);
@@ -148,6 +176,19 @@ export default function Home() {
   // event watching is unreliable against Monad's public RPC.
   const finished = state === RoundState.Finished;
   const frozen = Boolean(freezeUntil && freezeUntil > Date.now());
+
+  // Clear the freeze on a timer so the board re-enables itself. Without this the component
+  // depends on some unrelated re-render happening to notice the freeze expired.
+  useEffect(() => {
+    if (freezeUntil === null) return;
+    const remaining = freezeUntil - Date.now();
+    if (remaining <= 0) {
+      setFreezeUntil(null);
+      return;
+    }
+    const id = setTimeout(() => setFreezeUntil(null), remaining);
+    return () => clearTimeout(id);
+  }, [freezeUntil]);
 
   const statusLine = connectError?.message ?? (finished ? "Board cleared — round finished." : null);
 
@@ -242,16 +283,26 @@ export default function Home() {
                   <span className="ml-2 font-bold text-red-800">— top up to enter</span>
                 )}
               </p>
-              <button
-                disabled={!isConnected || wrongNetwork || isFunding}
-                onClick={() => fundSession({ to: session.account.address, value: parseEther("1") })}
-                className="win-btn mt-2 px-3 py-1 font-bold disabled:opacity-60"
-              >
-                {isFunding ? "Funding…" : "Fund 1 MON from your wallet"}
-              </button>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  disabled={!isConnected || wrongNetwork || isFunding}
+                  onClick={() => fundSession({ to: session.account.address, value: parseEther("1") })}
+                  className="win-btn px-3 py-1 font-bold disabled:opacity-60"
+                >
+                  {isFunding ? "Funding…" : "Fund 1 MON from your wallet"}
+                </button>
+                <button
+                  disabled={!isConnected || isCashingOut || (sessionBalance?.value ?? 0n) <= parseEther("0.005")}
+                  onClick={() => void cashOut()}
+                  className="win-btn px-3 py-1 font-bold disabled:opacity-60"
+                >
+                  {isCashingOut ? "Cashing out…" : "Cash out to my wallet"}
+                </button>
+              </div>
               <p className="mt-1 text-neutral-600">
-                One confirmation, then the round is prompt-free. Winnings land here — send them
-                back to your main wallet afterwards.
+                One confirmation to fund, then the round is prompt-free. Winnings are paid here
+                as you reveal tiles — cash out moves them to your connected wallet, keeping
+                0.005 MON back for gas.
               </p>
             </div>
           )}
