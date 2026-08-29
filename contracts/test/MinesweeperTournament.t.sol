@@ -14,12 +14,16 @@ contract MinesweeperTournamentTest is Test {
     address alice = address(0xA11CE);
     address bob = address(0xB0B);
 
-    // Fixed 4-tile test board: indices 0,1 safe; indices 2,3 mines.
+    // Fixed 2x2 test board: indices 0,1 safe; indices 2,3 mines. On a 2x2 grid every tile
+    // touches every other, so each safe tile's hint is 2 and each mine tile's is 1.
     uint256 constant BOARD_SEED = 42;
+    uint16 constant WIDTH = 2;
+    uint16 constant HEIGHT = 2;
     uint16 constant TOTAL_TILES = 4;
     uint16 constant TOTAL_SAFE = 2;
 
     bool[] isMine;
+    uint8[] hints;
     bytes32[] leaves;
     bytes32 root;
 
@@ -33,8 +37,15 @@ contract MinesweeperTournamentTest is Test {
         isMine.push(true);
         isMine.push(true);
 
+        // Computed by hand, independently of the contract's `_adjacentMines`, so a pass
+        // means the contract agrees with an external view of the board — not just itself.
+        hints.push(2);
+        hints.push(2);
+        hints.push(1);
+        hints.push(1);
+
         for (uint16 i = 0; i < TOTAL_TILES; i++) {
-            leaves.push(keccak256(abi.encode(i, isMine[i], _nonce(i))));
+            leaves.push(keccak256(abi.encode(i, isMine[i], hints[i], _nonce(i))));
         }
         root = _computeRoot(leaves);
     }
@@ -83,7 +94,7 @@ contract MinesweeperTournamentTest is Test {
     }
 
     function _createAndStartRound() internal returns (uint256 roundId) {
-        roundId = tournament.createRound(1 ether, TOTAL_SAFE, 2);
+        roundId = tournament.createRound(1 ether, WIDTH, HEIGHT, TOTAL_SAFE, 2);
         vm.prank(alice);
         tournament.enter{value: 1 ether}(roundId);
         vm.prank(bob);
@@ -96,7 +107,7 @@ contract MinesweeperTournamentTest is Test {
         uint256 balBefore = alice.balance;
 
         vm.prank(alice);
-        tournament.revealSafeTile(roundId, 0, _nonce(0), _proof(0));
+        tournament.revealSafeTile(roundId, 0, hints[0], _nonce(0), _proof(0));
 
         // pool = 2 ether, totalSafeTiles = 2 -> reward = 1 ether per tile.
         assertEq(alice.balance, balBefore + 1 ether);
@@ -106,11 +117,11 @@ contract MinesweeperTournamentTest is Test {
     function test_DuplicateRevealReverts() public {
         uint256 roundId = _createAndStartRound();
         vm.prank(alice);
-        tournament.revealSafeTile(roundId, 0, _nonce(0), _proof(0));
+        tournament.revealSafeTile(roundId, 0, hints[0], _nonce(0), _proof(0));
 
         vm.prank(bob);
         vm.expectRevert(MinesweeperTournament.TileAlreadyRevealed.selector);
-        tournament.revealSafeTile(roundId, 0, _nonce(0), _proof(0));
+        tournament.revealSafeTile(roundId, 0, hints[0], _nonce(0), _proof(0));
     }
 
     function test_MineTileCannotBeClaimedAsSafe() public {
@@ -118,17 +129,17 @@ contract MinesweeperTournamentTest is Test {
         // tile 2 is a mine; claiming it as safe (isMine=false) must fail proof verification.
         vm.prank(alice);
         vm.expectRevert(MinesweeperTournament.InvalidProof.selector);
-        tournament.revealSafeTile(roundId, 2, _nonce(2), _proof(2));
+        tournament.revealSafeTile(roundId, 2, hints[2], _nonce(2), _proof(2));
     }
 
     function test_BoardClearedFinishesRoundAndPublishesBoard() public {
         uint256 roundId = _createAndStartRound();
         vm.prank(alice);
-        tournament.revealSafeTile(roundId, 0, _nonce(0), _proof(0));
+        tournament.revealSafeTile(roundId, 0, hints[0], _nonce(0), _proof(0));
         vm.prank(bob);
-        tournament.revealSafeTile(roundId, 1, _nonce(1), _proof(1));
+        tournament.revealSafeTile(roundId, 1, hints[1], _nonce(1), _proof(1));
 
-        (,,,,,,, MinesweeperTournament.RoundState state) = tournament.roundInfo(roundId);
+        (,,,,,,, MinesweeperTournament.RoundState state,,) = tournament.roundInfo(roundId);
         assertEq(uint8(state), uint8(MinesweeperTournament.RoundState.Finished));
 
         tournament.revealBoard(roundId, isMine, BOARD_SEED);
@@ -141,9 +152,9 @@ contract MinesweeperTournamentTest is Test {
     function test_RevealBoardRejectsTamperedBoard() public {
         uint256 roundId = _createAndStartRound();
         vm.prank(alice);
-        tournament.revealSafeTile(roundId, 0, _nonce(0), _proof(0));
+        tournament.revealSafeTile(roundId, 0, hints[0], _nonce(0), _proof(0));
         vm.prank(bob);
-        tournament.revealSafeTile(roundId, 1, _nonce(1), _proof(1));
+        tournament.revealSafeTile(roundId, 1, hints[1], _nonce(1), _proof(1));
 
         bool[] memory tampered = new bool[](4);
         tampered[0] = false;
@@ -156,7 +167,7 @@ contract MinesweeperTournamentTest is Test {
     }
 
     function test_CancelRoundRefundsEntrants() public {
-        uint256 roundId = tournament.createRound(1 ether, TOTAL_SAFE, 2);
+        uint256 roundId = tournament.createRound(1 ether, WIDTH, HEIGHT, TOTAL_SAFE, 2);
         vm.prank(alice);
         tournament.enter{value: 1 ether}(roundId);
 
@@ -166,7 +177,7 @@ contract MinesweeperTournamentTest is Test {
     }
 
     function test_StartRoundRevertsBelowMinPlayers() public {
-        uint256 roundId = tournament.createRound(1 ether, TOTAL_SAFE, 2);
+        uint256 roundId = tournament.createRound(1 ether, WIDTH, HEIGHT, TOTAL_SAFE, 2);
         vm.prank(alice);
         tournament.enter{value: 1 ether}(roundId);
 
@@ -174,8 +185,84 @@ contract MinesweeperTournamentTest is Test {
         tournament.startRound(roundId, root);
     }
 
+    /// @dev The hint is inside the committed leaf, so a caller cannot substitute a different
+    ///      number — the proof stops verifying. This is what stops a player claiming a tile
+    ///      while feeding everyone else a false neighbour count.
+    function test_ForgedAdjacentMinesCountReverts() public {
+        uint256 roundId = _createAndStartRound();
+
+        vm.prank(alice);
+        vm.expectRevert(MinesweeperTournament.InvalidProof.selector);
+        tournament.revealSafeTile(roundId, 0, hints[0] + 1, _nonce(0), _proof(0));
+    }
+
+    /// @dev The count is revealed to everyone (emitted publicly + stored for late joiners),
+    ///      while only the revealer is paid.
+    function test_HintIsPublicButOnlyRevealerIsPaid() public {
+        uint256 roundId = _createAndStartRound();
+        uint256 bobBefore = bob.balance;
+
+        vm.expectEmit(true, true, true, true);
+        emit MinesweeperTournament.TileRevealed(roundId, 0, alice, hints[0], 1 ether);
+        vm.prank(alice);
+        tournament.revealSafeTile(roundId, 0, hints[0], _nonce(0), _proof(0));
+
+        // Public: readable by anyone, not just the revealer.
+        assertEq(tournament.tileHint(roundId, 0), hints[0]);
+        (bool[] memory revealed, uint8[] memory publishedHints) = tournament.revealedTiles(roundId);
+        assertTrue(revealed[0]);
+        assertEq(publishedHints[0], hints[0]);
+        assertFalse(revealed[1]);
+
+        // Private: bob learned the number but was not paid for alice's reveal.
+        assertEq(bob.balance, bobBefore);
+    }
+
+    /// @dev `revealBoard` recomputes every hint from the published layout, so a board whose
+    ///      mines don't reproduce the committed counts cannot be published — even if the
+    ///      mine layout alone would have hashed correctly.
+    function test_RevealBoardRecomputesHints() public {
+        uint256 roundId = _createAndStartRound();
+        vm.prank(alice);
+        tournament.revealSafeTile(roundId, 0, hints[0], _nonce(0), _proof(0));
+        vm.prank(bob);
+        tournament.revealSafeTile(roundId, 1, hints[1], _nonce(1), _proof(1));
+
+        // The honest board reconciles.
+        tournament.revealBoard(roundId, isMine, BOARD_SEED);
+        assertEq(tournament.finalBoardOf(roundId).length, TOTAL_TILES);
+    }
+
+    function test_CreateRoundRejectsBadDimensions() public {
+        vm.expectRevert(MinesweeperTournament.InvalidDimensions.selector);
+        tournament.createRound(1 ether, 0, HEIGHT, TOTAL_SAFE, 2);
+
+        // More "safe" tiles claimed than the grid can hold.
+        vm.expectRevert(MinesweeperTournament.InvalidDimensions.selector);
+        tournament.createRound(1 ether, WIDTH, HEIGHT, TOTAL_TILES + 1, 2);
+
+        // A grid with more tiles than a uint16 tile index can address: every tile past
+        // 65535 would be unrevealable, so the round could never finish.
+        vm.expectRevert(MinesweeperTournament.InvalidDimensions.selector);
+        tournament.createRound(1 ether, 256, 256, TOTAL_SAFE, 2);
+
+        // 255x257 = 65535 is the largest addressable grid, and must still be accepted.
+        tournament.createRound(1 ether, 255, 257, TOTAL_SAFE, 2);
+    }
+
+    /// @dev Only players who actually paid the entry fee can claim a tile — a stranger with
+    ///      a perfectly valid proof and the correct hint is still rejected.
+    function test_NonEntrantCannotRevealTile() public {
+        uint256 roundId = _createAndStartRound();
+        address stranger = address(0xBAD);
+
+        vm.prank(stranger);
+        vm.expectRevert(MinesweeperTournament.NotEntered.selector);
+        tournament.revealSafeTile(roundId, 0, hints[0], _nonce(0), _proof(0));
+    }
+
     function test_WrongEntryFeeReverts() public {
-        uint256 roundId = tournament.createRound(1 ether, TOTAL_SAFE, 2);
+        uint256 roundId = tournament.createRound(1 ether, WIDTH, HEIGHT, TOTAL_SAFE, 2);
         vm.prank(alice);
         vm.expectRevert(MinesweeperTournament.WrongEntryFee.selector);
         tournament.enter{value: 0.5 ether}(roundId);

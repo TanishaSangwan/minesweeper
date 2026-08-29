@@ -3,6 +3,7 @@ import type { Hex } from "viem";
 import { generateBoard, type GeneratedBoard, type BoardConfig } from "./board.js";
 import {
   createRoundOnChain,
+  readEntrants,
   revealBoardOnChain,
   startRoundOnChain,
   watchRoundFinished,
@@ -13,12 +14,18 @@ import { proofFor } from "./merkle.js";
 
 type Address = `0x${string}`;
 
+/** Addresses reach this process from two places with different casing — checksummed from the
+ *  contract, arbitrary from the WS query string — so normalize before comparing them. */
+function normalizeAddress(address: string): Address {
+  return address.toLowerCase() as Address;
+}
+
 export type ServerMessage =
-  | { type: "safe"; tileIndex: number; nonce: string; proof: Hex[] }
+  | { type: "safe"; tileIndex: number; adjacentMines: number; nonce: string; proof: Hex[] }
   | { type: "mine-hit"; tileIndex: number; freezeMs: number; freezeUntil: number }
   | { type: "frozen"; remainingMs: number }
   | { type: "already-revealed"; tileIndex: number }
-  | { type: "tile-revealed"; tileIndex: number; player: Address; reward: string }
+  | { type: "tile-revealed"; tileIndex: number; adjacentMines: number; player: Address; reward: string }
   | { type: "flag"; tileIndex: number; player: Address; flagged: boolean }
   | { type: "round-finished" }
   | { type: "error"; message: string };
@@ -26,6 +33,9 @@ export type ServerMessage =
 interface ActiveRound {
   roundId: bigint;
   board: GeneratedBoard;
+  started: boolean; // true once startRound has been confirmed onchain (entries locked, root committed)
+  entrants: Set<Address>; // lowercased; read off the contract at startRound, final thereafter
+  entrantsLoaded: boolean; // false until that read succeeds — an empty set is not "no entrants"
   revealed: Set<number>; // mirrors onchain TileRevealed truth
   frozenUntil: Map<Address, number>; // epoch ms
   flags: Map<number, Address>;
@@ -43,21 +53,29 @@ interface ActiveRound {
 export class RoundManager {
   private rounds = new Map<bigint, ActiveRound>();
 
-  async createAndStart(config: BoardConfig, entryFeeWei: bigint, minPlayers: number): Promise<bigint> {
+  /** Opens a round for entries. Generates the board immediately (kept secret in memory) but
+   *  deliberately does not commit its root onchain yet — see `startRound`. Waits for the
+   *  createRound transaction to actually be mined (not just submitted) before returning,
+   *  since `startRound` needs to observe this round's existence onchain. */
+  async createRound(config: BoardConfig, entryFeeWei: bigint, minPlayers: number): Promise<bigint> {
     const board = generateBoard(config);
-
-    const createHash = await createRoundOnChain(entryFeeWei, board.totalSafeTiles, minPlayers);
-    console.log(`createRound tx: ${createHash}`);
-    // In a real deploy, read the roundId back out of the RoundCreated event/receipt instead
-    // of assuming it's sequential — left simple here since this operator is the only writer.
-    const roundId = BigInt(this.rounds.size);
-
-    const startHash = await startRoundOnChain(roundId, board.root);
-    console.log(`startRound tx: ${startHash}`);
+    // Dimensions go onchain because `revealBoard` recomputes every tile's neighbour count
+    // from the published layout to check it against the commitment.
+    const roundId = await createRoundOnChain(
+      entryFeeWei,
+      board.width,
+      board.height,
+      board.totalSafeTiles,
+      minPlayers,
+    );
+    console.log(`round ${roundId} created (createRound confirmed onchain)`);
 
     this.rounds.set(roundId, {
       roundId,
       board,
+      started: false,
+      entrants: new Set(),
+      entrantsLoaded: false,
       revealed: new Set(),
       frozenUntil: new Map(),
       flags: new Map(),
@@ -65,6 +83,47 @@ export class RoundManager {
     });
 
     return roundId;
+  }
+
+  /** Locks entries and commits the board's Merkle root onchain — call once enough players
+   *  have entered. The contract enforces `minPlayers` itself and reverts otherwise; that
+   *  revert propagates to the caller rather than being swallowed. */
+  async startRound(roundId: bigint): Promise<void> {
+    const round = this.mustGet(roundId);
+    if (round.started) throw new Error(`round ${roundId} already started`);
+
+    await startRoundOnChain(roundId, round.board.root);
+    // Mark started as soon as the transaction lands. The chain is authoritative: once
+    // startRound is mined the round IS InProgress, and a later failure here must not leave
+    // this process believing otherwise — that state is unrecoverable, because re-calling
+    // startRound reverts and `cancelRound` only works while a round is still Open.
+    round.started = true;
+    console.log(`round ${roundId} started (entries locked, root committed onchain)`);
+
+    // Entries are locked now, so the entrant list is final. Loading it is best-effort and
+    // retried: the public RPC rate-limits (15/sec), and a transient failure here must not
+    // strand the round.
+    await this.loadEntrants(round);
+  }
+
+  /** Caches the round's final entrant list, retrying through transient RPC failures. */
+  private async loadEntrants(round: ActiveRound, attempts = 6): Promise<void> {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const entrants = await readEntrants(round.roundId);
+        round.entrants = new Set(entrants.map(normalizeAddress));
+        round.entrantsLoaded = true;
+        console.log(`round ${round.roundId}: ${round.entrants.size} entrants cached`);
+        return;
+      } catch (err) {
+        const wait = 400 * attempt;
+        console.warn(
+          `round ${round.roundId}: entrant load attempt ${attempt}/${attempts} failed (${(err as Error).message.split("\n")[0]}), retrying in ${wait}ms`,
+        );
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    }
+    console.error(`round ${round.roundId}: could not cache entrants; clicks will retry on demand`);
   }
 
   /** Dimensions + tile counts only — never the mine layout itself. Safe to expose publicly
@@ -91,6 +150,22 @@ export class RoundManager {
    *  hit is only ever sent back to the clicking player, never broadcast. */
   handleClick(roundId: bigint, player: Address, tileIndex: number): ServerMessage {
     const round = this.mustGet(roundId);
+    if (!round.started) {
+      return { type: "error", message: "round has not started yet — entries are still open" };
+    }
+    // `revealSafeTile` reverts with NotEntered for anyone who didn't pay, so handing a
+    // non-entrant a proof would only buy them a guaranteed-to-revert transaction — and on
+    // Monad a revert still costs gas_limit * price. Refuse here instead.
+    if (!round.entrantsLoaded) {
+      // Cache is cold (the startRound read failed and is still retrying). Refusing here would
+      // wrongly tell a paid-up player they never entered, so retry the load and ask them to
+      // click again rather than asserting either way.
+      void this.loadEntrants(round, 3);
+      return { type: "error", message: "still verifying entries — click again in a moment" };
+    }
+    if (!round.entrants.has(normalizeAddress(player))) {
+      return { type: "error", message: "you have not entered this round" };
+    }
     const now = Date.now();
 
     const frozenUntil = round.frozenUntil.get(player) ?? 0;
@@ -112,11 +187,15 @@ export class RoundManager {
       return { type: "mine-hit", tileIndex, freezeMs: env.freezeMs, freezeUntil };
     }
 
-    // Safe: hand back exactly what's needed to submit revealSafeTile onchain. Actual
-    // "revealed" state only flips once the TileRevealed event confirms (see wireChainEvents).
+    // Safe: hand back exactly what's needed to submit revealSafeTile onchain. The hint is
+    // part of the committed leaf, so it must be submitted with the proof — and it only
+    // becomes public for everyone else once TileRevealed carries it back out of the
+    // contract, which is also when this player is paid. Actual "revealed" state only flips
+    // once that event confirms (see wireChainEvents).
     return {
       type: "safe",
       tileIndex,
+      adjacentMines: round.board.adjacentMines[tileIndex],
       nonce: round.board.nonces[tileIndex].toString(),
       proof: proofFor(round.board.leaves, tileIndex),
     };
@@ -146,11 +225,19 @@ export class RoundManager {
   /** Subscribes to onchain truth once, at startup, and keeps every active round's mirror
    *  (and connected clients) in sync with it. */
   wireChainEvents() {
-    watchTileRevealed(({ roundId, tileIndex, player, reward }) => {
+    watchTileRevealed(({ roundId, tileIndex, adjacentMines, player, reward }) => {
       const round = this.rounds.get(roundId);
       if (!round) return;
       round.revealed.add(tileIndex);
-      this.broadcast(roundId, { type: "tile-revealed", tileIndex, player, reward: reward.toString() });
+      // The hint is broadcast to everyone; `reward` is informational here — it was already
+      // paid to `player` by the contract, and no other client is being credited by this.
+      this.broadcast(roundId, {
+        type: "tile-revealed",
+        tileIndex,
+        adjacentMines,
+        player,
+        reward: reward.toString(),
+      });
     });
 
     watchRoundFinished(async ({ roundId }) => {
@@ -158,8 +245,10 @@ export class RoundManager {
       if (!round) return;
       this.broadcast(roundId, { type: "round-finished" });
       try {
-        const hash = await revealBoardOnChain(roundId, round.board.isMine, round.board.boardSeed);
-        console.log(`revealBoard tx for round ${roundId}: ${hash}`);
+        // `revealBoardOnChain` resolves to a receipt now, not a hash — logging the object
+        // itself would print "[object Object]".
+        const receipt = await revealBoardOnChain(roundId, round.board.isMine, round.board.boardSeed);
+        console.log(`revealBoard tx for round ${roundId}: ${receipt.transactionHash}`);
       } catch (err) {
         console.error(`revealBoard failed for round ${roundId}`, err);
       }

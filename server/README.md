@@ -21,9 +21,16 @@ gas.
 
 ## HTTP
 
-`POST /api/rounds` — `{ width, height, mineCount, entryFeeWei, minPlayers }` → generates a
-board, calls `createRound` + `startRound` onchain, returns `{ roundId }`. Put this behind
-admin auth before it's public.
+Two-step, matching the contract's own `Open` → `InProgress` lifecycle — there's a real window
+between them for players to call `enter` before the pool is locked in. Both admin-only in a
+real deploy (put behind auth).
+
+- `POST /api/rounds` — `{ width, height, mineCount, entryFeeWei, minPlayers }` → generates a
+  board (kept secret in memory), calls `createRound` onchain, returns `{ roundId }`. Entries
+  are open at this point; nothing is committed yet.
+- `POST /api/rounds/:id/start` — call once enough players have entered. Locks entries, commits
+  the board's Merkle root onchain (`startRound`), and opens play. Reverts (returned as a 400)
+  if the contract's own `minPlayers` threshold hasn't been met.
 
 ## WebSocket — `/ws?roundId=<id>&player=<0x address>`
 

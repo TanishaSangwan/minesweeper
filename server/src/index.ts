@@ -13,10 +13,9 @@ app.use(express.json());
 const rounds = new RoundManager();
 rounds.wireChainEvents();
 
-// Admin-only in a real deploy (put behind auth) — creates a round, generates + commits the
-// board, and opens play. Kept as a single call for hackathon simplicity; splitting
-// "createRound" (open entries) from "startRound" (lock + commit) at the contract level still
-// lets you expose a separate `/api/rounds/:id/start` later without changing the contract.
+// Admin-only in a real deploy (put behind auth). Opens a round for entries and generates the
+// board (kept secret in memory) — does NOT commit the root onchain yet, so players still have
+// a window to call `enter` before the pool used for reward-per-tile math is locked in.
 app.post("/api/rounds", async (req, res) => {
   try {
     const { width, height, mineCount, entryFeeWei, minPlayers } = req.body as {
@@ -26,12 +25,21 @@ app.post("/api/rounds", async (req, res) => {
       entryFeeWei: string;
       minPlayers: number;
     };
-    const roundId = await rounds.createAndStart(
-      { width, height, mineCount },
-      BigInt(entryFeeWei),
-      minPlayers,
-    );
+    const roundId = await rounds.createRound({ width, height, mineCount }, BigInt(entryFeeWei), minPlayers);
     res.json({ roundId: roundId.toString() });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// Admin-only. Call once enough players have entered — locks entries, commits the board's
+// Merkle root onchain, and opens play. Reverts (propagated as 400) if the contract's own
+// `minPlayers` threshold hasn't been met yet.
+app.post("/api/rounds/:id/start", async (req, res) => {
+  try {
+    await rounds.startRound(BigInt(req.params.id));
+    res.json({ started: true });
   } catch (err) {
     console.error(err);
     res.status(400).json({ error: (err as Error).message });
