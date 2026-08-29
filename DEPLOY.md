@@ -1,5 +1,12 @@
 # Deploying the broker + frontend
 
+## Live
+
+- **Broker**: https://broker-production-af4b.up.railway.app (Railway project `minesweeper-broker`,
+  service `broker`, volume `broker-volume` mounted at `/data`)
+- **Contract**: `0x1970bA7FceE762a529ED61D22880859F7a0E3Ab7` on Monad testnet
+
+
 The broker must go up first: the frontend is built against its URL.
 
 ## Why these hosts
@@ -19,6 +26,7 @@ railway login
 cd server
 railway init
 railway volume add --mount-path /data     # REQUIRED: round secrets live here
+# Note: no `--service` flag on this subcommand; it attaches to the linked service.
 railway up
 ```
 
@@ -65,8 +73,8 @@ Environment variables (note `wss://`, not `https://`, for the socket):
 | `NEXT_PUBLIC_RPC_HTTP_URL` | `https://testnet-rpc.monad.xyz` |
 | `NEXT_PUBLIC_RPC_WS_URL` | `wss://testnet-rpc.monad.xyz` |
 | `NEXT_PUBLIC_CONTRACT_ADDRESS` | `0x1970bA7FceE762a529ED61D22880859F7a0E3Ab7` |
-| `NEXT_PUBLIC_BROKER_HTTP_URL` | `https://<your-railway-domain>` |
-| `NEXT_PUBLIC_BROKER_WS_URL` | `wss://<your-railway-domain>` |
+| `NEXT_PUBLIC_BROKER_HTTP_URL` | `https://broker-production-af4b.up.railway.app` |
+| `NEXT_PUBLIC_BROKER_WS_URL` | `wss://broker-production-af4b.up.railway.app` |
 
 Then `vercel --prod`.
 
