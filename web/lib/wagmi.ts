@@ -29,4 +29,8 @@ export const wagmiConfig = createConfig({
   transports: {
     [monadTestnet.id]: http(),
   },
+  // Next.js App Router renders once on the server (no window.ethereum there) and once on the
+  // client — without this, wagmi's initial connector/account state can mismatch between the
+  // two passes.
+  ssr: true,
 });

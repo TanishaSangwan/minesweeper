@@ -10,8 +10,6 @@ import {
   useReadContract,
   useSendTransaction,
   useSwitchChain,
-  useWaitForTransactionReceipt,
-  useWriteContract,
 } from "wagmi";
 import { Board } from "@/components/Board";
 import { FreezeOverlay } from "@/components/FreezeOverlay";
@@ -82,11 +80,6 @@ export default function Home() {
       .catch(() => setDims(null));
   }, [roundId]);
 
-  const { writeContract: writeEnter, data: enterHash } = useWriteContract();
-  useWaitForTransactionReceipt({ hash: enterHash });
-
-  const { writeContract: writeReveal } = useWriteContract();
-
   const handleMessage = useCallback(
     (msg: ServerMessage) => {
       switch (msg.type) {
@@ -141,7 +134,7 @@ export default function Home() {
           break;
       }
     },
-    [roundId, writeReveal],
+    [roundId, session],
   );
 
   const { click, flag: sendFlag } = useGameSocket(
@@ -156,152 +149,171 @@ export default function Home() {
   const finished = state === RoundState.Finished;
   const frozen = Boolean(freezeUntil && freezeUntil > Date.now());
 
+  const statusLine = connectError?.message ?? (finished ? "Board cleared — round finished." : null);
+
   return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-10">
+    <main className="flex min-h-screen items-start justify-center p-6 sm:p-10">
       <FreezeOverlay freezeUntil={freezeUntil} />
 
-      <header className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Minesweeper Tournament</h1>
-        {isConnected ? (
-          <button onClick={() => disconnect()} className="rounded-md border border-slate-700 px-3 py-1.5 text-sm">
-            {address?.slice(0, 6)}…{address?.slice(-4)} · disconnect
-          </button>
-        ) : connectors.length > 0 ? (
-          // One button per discovered wallet (EIP-6963), rather than assuming connectors[0]
-          // exists — with no wallet extension installed that array is empty and the old
-          // single button silently did nothing when clicked.
-          <div className="flex gap-2">
-            {connectors.map((connector) => (
-              <button
-                key={connector.uid}
-                disabled={isConnecting}
-                onClick={() => connect({ connector })}
-                className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
-              >
-                {isConnecting ? "Connecting…" : `Connect ${connector.name}`}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <span className="text-sm text-amber-400">
-            No wallet detected — install MetaMask, then reload this page.
-          </span>
-        )}
-      </header>
-
-      {/* Connect failures were previously swallowed, so a rejected or unavailable wallet
-          looked identical to a dead button. */}
-      {connectError && (
-        <p className="rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-          Wallet connection failed: {connectError.message}
-        </p>
-      )}
-
-      {wrongNetwork && (
-        <div className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-3 text-sm">
-          <p className="font-semibold text-amber-300">
-            Wrong network — your wallet is on chain {chainId}, not Monad Testnet ({monadTestnet.id}).
-          </p>
-          <p className="mt-1 text-amber-200/80">
-            That&apos;s why fees are quoted in ETH. Entry fees and rewards are in MON.
-          </p>
-          <button
-            onClick={() => switchChain({ chainId: monadTestnet.id })}
-            disabled={isSwitching}
-            className="mt-2 rounded-md bg-amber-600 px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
-          >
-            {isSwitching ? "Switching…" : "Switch to Monad Testnet"}
-          </button>
-          {switchError && (
-            <p className="mt-2 text-red-300">
-              Switch failed: {switchError.message} — add it manually in MetaMask (chain id{" "}
-              {monadTestnet.id}, RPC {monadTestnet.rpcUrls.default.http[0]}, symbol MON).
-            </p>
-          )}
-        </div>
-      )}
-
-      {session && (
-        <section className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-3 text-sm">
-          <p className="font-semibold">Session wallet — signs tile reveals with no popup</p>
-          <p className="mt-1 font-mono text-xs text-slate-400 break-all">{session.account.address}</p>
-          <p className="mt-1 text-slate-300">
-            balance: {sessionBalance ? formatEther(sessionBalance.value) : "…"} MON
-            {entryFee !== undefined && (sessionBalance?.value ?? 0n) < entryFee && (
-              <span className="ml-2 text-amber-400">— needs topping up to enter</span>
-            )}
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              disabled={!isConnected || wrongNetwork || isFunding}
-              onClick={() =>
-                fundSession({ to: session.account.address, value: parseEther("1") })
-              }
-              className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
-            >
-              {isFunding ? "Funding…" : "Fund 1 MON from your wallet"}
-            </button>
-            <span className="text-xs text-slate-500">
-              One confirmation, then the whole round is prompt-free. Rewards land here — send
-              them back to your main wallet when you&apos;re done.
+      <div className="win-window w-full max-w-2xl">
+        {/* Title bar */}
+        <div className="win-titlebar flex items-center justify-between px-2 py-1">
+          <span className="flex items-center gap-2 text-sm">💣 Minesweeper Tournament</span>
+          <div className="flex gap-1">
+            <span className="win-raised flex h-4 w-4 items-center justify-center text-[10px] leading-none text-black">
+              _
+            </span>
+            <span className="win-raised flex h-4 w-4 items-center justify-center text-[10px] leading-none text-black">
+              ✕
             </span>
           </div>
-        </section>
-      )}
+        </div>
 
-      <section className="flex items-center gap-3 text-sm">
-        <label>Round ID</label>
-        <input
-          value={roundIdInput}
-          onChange={(e) => setRoundIdInput(e.target.value)}
-          className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1"
-        />
-        {entryFee !== undefined && <span className="text-slate-400">entry: {formatEther(entryFee)} MON</span>}
-        {rewardPerTile !== undefined && <span className="text-slate-400">reward/tile: {formatEther(rewardPerTile)} MON</span>}
-      </section>
+        <div className="p-3">
+          {/* Toolbar: wallet + LED counters, echoing the classic mine-counter/timer row */}
+          <div className="win-sunken mb-3 flex flex-wrap items-center justify-between gap-3 p-2">
+            <div className="win-sunken led-display px-2 py-1 text-lg">
+              {entryFee !== undefined ? `FEE ${formatEther(entryFee)}` : "FEE ----"}
+            </div>
 
-      {roundId !== null && state === RoundState.Open && (
-        <button
-          disabled={!session || entryFee === undefined || (sessionBalance?.value ?? 0n) < entryFee}
-          onClick={() =>
-            session
-              ?.client.writeContract({
-                ...tournamentContract,
-                chain: monadTestnet,
-                account: session.account,
-                functionName: "enter",
-                args: [roundId],
-                value: entryFee,
-              })
-              .then(() => setStatus("entered — waiting for the operator to start the round"))
-              .catch((err: Error) => setStatus(`enter failed: ${err.message.split("\n")[0]}`))
-          }
-          className="w-fit rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
-        >
-          Enter round (session wallet, no popup)
-        </button>
-      )}
+            {isConnected ? (
+              <button onClick={() => disconnect()} className="win-btn px-3 py-1 text-xs">
+                {address?.slice(0, 6)}…{address?.slice(-4)} · disconnect
+              </button>
+            ) : connectors.length === 0 ? (
+              <span className="text-xs font-bold text-red-800">No wallet extension detected</span>
+            ) : (
+              // One button per discovered wallet (EIP-6963) rather than assuming connectors[0]
+              // exists — that assumption made the button silently dead with no extension.
+              <div className="flex gap-1">
+                {connectors.map((connector) => (
+                  <button
+                    key={connector.uid}
+                    disabled={isConnecting}
+                    onClick={() => connect({ connector })}
+                    className="win-btn px-3 py-1 text-xs font-bold disabled:opacity-60"
+                  >
+                    {isConnecting ? "Connecting…" : connector.name}
+                  </button>
+                ))}
+              </div>
+            )}
 
-      {status && (
-        <p className="rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-2 text-sm text-sky-200">
-          {status}
-        </p>
-      )}
+            <div className="win-sunken led-display px-2 py-1 text-lg">
+              {rewardPerTile !== undefined ? `WIN ${formatEther(rewardPerTile)}` : "WIN ----"}
+            </div>
+          </div>
 
-      {finished && <p className="text-emerald-400">Board cleared — round finished.</p>}
+          {/* Funding goes through the injected wallet, so it has to be on Monad. Reveals do
+              not — the session wallet has the chain hard-wired. */}
+          {wrongNetwork && (
+            <div className="win-sunken mb-3 p-2 text-xs">
+              <p className="font-bold text-red-800">
+                Wrong network — wallet is on chain {chainId}, not Monad Testnet ({monadTestnet.id}).
+              </p>
+              <p className="mt-1">That&apos;s why fees show in ETH. Entry fees and rewards are in MON.</p>
+              <button
+                onClick={() => switchChain({ chainId: monadTestnet.id })}
+                disabled={isSwitching}
+                className="win-btn mt-2 px-3 py-1 font-bold disabled:opacity-60"
+              >
+                {isSwitching ? "Switching…" : "Switch to Monad Testnet"}
+              </button>
+              {switchError && (
+                <p className="mt-1 text-red-800">
+                  Switch failed — add it manually: chain id {monadTestnet.id}, RPC{" "}
+                  {monadTestnet.rpcUrls.default.http[0]}, symbol MON.
+                </p>
+              )}
+            </div>
+          )}
 
-      {dims && (
-        <Board
-          width={dims.width}
-          height={dims.height}
-          revealed={revealed}
-          flags={flags}
-          myAddress={address}
-          frozen={frozen || !inProgress}
-          onReveal={click}
-          onToggleFlag={(index) => sendFlag(index, !flags.has(index))}
-        />
-      )}
+          {/* Session wallet: signs every reveal, so a round is playable without a dialog per
+              tile. It is the entrant too — revealSafeTile authorises and pays msg.sender. */}
+          {session && (
+            <div className="win-sunken mb-3 p-2 text-xs">
+              <p className="font-bold">Session wallet — reveals sign themselves, no popup</p>
+              <p className="mt-1 break-all font-mono text-[10px] text-neutral-700">
+                {session.account.address}
+              </p>
+              <p className="mt-1">
+                balance: {sessionBalance ? formatEther(sessionBalance.value) : "…"} MON
+                {entryFee !== undefined && (sessionBalance?.value ?? 0n) < entryFee && (
+                  <span className="ml-2 font-bold text-red-800">— top up to enter</span>
+                )}
+              </p>
+              <button
+                disabled={!isConnected || wrongNetwork || isFunding}
+                onClick={() => fundSession({ to: session.account.address, value: parseEther("1") })}
+                className="win-btn mt-2 px-3 py-1 font-bold disabled:opacity-60"
+              >
+                {isFunding ? "Funding…" : "Fund 1 MON from your wallet"}
+              </button>
+              <p className="mt-1 text-neutral-600">
+                One confirmation, then the round is prompt-free. Winnings land here — send them
+                back to your main wallet afterwards.
+              </p>
+            </div>
+          )}
+
+          {/* Round controls */}
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+            <label className="font-bold">Round ID</label>
+            <input
+              value={roundIdInput}
+              onChange={(e) => setRoundIdInput(e.target.value)}
+              className="win-sunken w-16 bg-white px-2 py-1 text-black outline-none"
+            />
+            {roundId !== null && state === RoundState.Open && (
+              <button
+                disabled={!session || entryFee === undefined || (sessionBalance?.value ?? 0n) < entryFee}
+                onClick={() =>
+                  session
+                    ?.client.writeContract({
+                      ...tournamentContract,
+                      chain: monadTestnet,
+                      account: session.account,
+                      functionName: "enter",
+                      args: [roundId],
+                      value: entryFee,
+                    })
+                    .then(() => setStatus("entered — waiting for the operator to start the round"))
+                    .catch((err: Error) => setStatus(`enter failed: ${err.message.split("\n")[0]}`))
+                }
+                className="win-btn px-3 py-1 font-bold disabled:opacity-60"
+              >
+                Enter Round
+              </button>
+            )}
+          </div>
+
+          {/* Board */}
+          <div className="flex justify-center">
+            {dims ? (
+              <Board
+                width={dims.width}
+                height={dims.height}
+                revealed={revealed}
+                flags={flags}
+                myAddress={sessionAddress}
+                frozen={frozen || !inProgress}
+                onReveal={click}
+                onToggleFlag={(index) => sendFlag(index, !flags.has(index))}
+              />
+            ) : (
+              <div className="win-sunken px-4 py-6 text-xs text-neutral-600">Waiting for round…</div>
+            )}
+          </div>
+        </div>
+
+        {/* Status bar — broker replies land here; they used to go only to the console, so a
+            rejected click was indistinguishable from a dead board. */}
+        <div className="win-sunken mx-3 mb-3 px-2 py-1 text-xs">
+          {status ??
+            statusLine ??
+            (frozen ? "Frozen — hold on…" : inProgress ? "Right-click a tile to flag it." : "Round not started yet.")}
+        </div>
+      </div>
     </main>
   );
 }

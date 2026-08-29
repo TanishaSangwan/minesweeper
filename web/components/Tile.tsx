@@ -14,17 +14,18 @@ interface TileProps {
   onToggleFlag: (index: number) => void;
 }
 
-// Classic Minesweeper hint colours, picked to stay legible on the dark revealed-tile fill.
+// The original Minesweeper hint palette (1 blue, 2 green, 3 red, 4 navy, 5 maroon, 6 teal,
+// 7 black, 8 grey), in shades dark enough to read on the light sunken tile face.
 const HINT_COLORS = [
   "",
-  "text-sky-400",
-  "text-emerald-400",
-  "text-red-400",
-  "text-indigo-400",
-  "text-amber-500",
-  "text-cyan-400",
-  "text-slate-200",
-  "text-slate-400",
+  "text-blue-700",
+  "text-green-700",
+  "text-red-600",
+  "text-blue-900",
+  "text-red-900",
+  "text-teal-700",
+  "text-black",
+  "text-neutral-600",
 ];
 
 export function Tile({
@@ -47,13 +48,14 @@ export function Tile({
         if (!revealed) onToggleFlag(index);
       }}
       className={[
-        "aspect-square w-full rounded-md border text-sm font-bold transition-colors",
+        "win-tile flex aspect-square w-full items-center justify-center text-sm font-bold leading-none",
         revealed
           ? revealedByMe
-            ? "border-emerald-500 bg-emerald-500/20"
-            : "border-slate-600 bg-slate-800/60"
-          : "border-slate-700 bg-slate-900 hover:bg-slate-800 disabled:opacity-50",
-        revealed ? HINT_COLORS[adjacentMines] ?? "text-slate-200" : "",
+            ? "win-tile-sunken win-tile-sunken-mine"
+            : "win-tile-sunken"
+          : "win-tile-raised cursor-pointer disabled:cursor-not-allowed",
+        // The hint colour has to win over the tile's own text colour, so it comes last.
+        revealed ? HINT_COLORS[adjacentMines] ?? "text-black" : "",
       ].join(" ")}
       title={flaggedBy ? `Flagged by ${flaggedBy}` : undefined}
     >
